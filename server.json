@@ -1,0 +1,31 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.enrichlayer/mcp-server-v3",
+  "title": "Enrich Layer v3",
+  "description": "Person and company profiles, company search and logos, work emails and email checks",
+  "repository": {
+    "url": "https://github.com/enrichlayer/mcp",
+    "source": "github"
+  },
+  "websiteUrl": "https://enrichlayer.com",
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@enrichlayer/mcp-server-v3",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "ENRICHLAYER_API_KEY",
+          "description": "Enrich Layer API key from enrichlayer.com/dashboard",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
