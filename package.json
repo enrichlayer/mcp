@@ -1,0 +1,59 @@
+{
+  "name": "@enrichlayer/mcp-server-v3",
+  "version": "0.1.0",
+  "mcpName": "io.github.enrichlayer/mcp-server-v3",
+  "description": "MCP server for the Enrich Layer v3 API — person and company profiles, company search and logos, work email search and email validation",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "enrichlayer-mcp-v3": "build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node build/index.js",
+    "update-spec": "node scripts/update-spec.mjs",
+    "gen:params": "node scripts/generate-params.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "enrich-layer",
+    "enrichment",
+    "company-data",
+    "person-data",
+    "email-validation"
+  ],
+  "author": "Enrich Layer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/enrichlayer/mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/enrichlayer/mcp/issues"
+  },
+  "homepage": "https://github.com/enrichlayer/mcp#readme",
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@types/node": "22.20.5",
+    "typescript": "6.0.3"
+  },
+  "engines": {
+    "node": ">=20.3"
+  },
+  "files": [
+    "build",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
