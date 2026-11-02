@@ -1,0 +1,39 @@
+# Publishes server.json to the official MCP registry. Run it by hand from the
+# Actions tab after the version is published on npm from Staged Packages: the
+# registry checks that this npm version exists and carries the same mcpName.
+name: Registry
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      MCP_PUBLISHER_VERSION: v1.8.7
+      MCP_PUBLISHER_SHA256: 00b21004149a4ce66f0782508ae4a2bce67d1bea395a8da0bd8028159fb59579
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download mcp-publisher
+        run: |
+          archive=mcp-publisher_linux_amd64.tar.gz
+          curl --fail --location --silent --show-error --output "$archive" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/${archive}"
+          echo "${MCP_PUBLISHER_SHA256}  ${archive}" | sha256sum --check
+          tar -xzf "$archive" mcp-publisher
+      - run: ./mcp-publisher validate
+      - name: Version is on npm
+        run: |
+          spec="$(node -p "const s = require('./server.json'); s.packages[0].identifier + '@' + s.version")"
+          if [ -z "$(npm view "$spec" version 2>/dev/null)" ]; then
+            echo "$spec is not on npm yet. Publish it from Staged Packages on npmjs.com, then run this workflow again."
+            exit 1
+          fi
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish
+      - name: Registry card
+        run: curl --fail --silent --show-error "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.enrichlayer%2Fmcp-server-v3/versions/latest"
