@@ -15,7 +15,9 @@ export async function startApi(respond) {
     if (reply.delayMs) await new Promise((resolve) => setTimeout(resolve, reply.delayMs));
     if (res.destroyed) return;
     res.writeHead(reply.status ?? 200, { "Content-Type": "application/json", ...reply.headers });
-    res.end(typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body ?? {}));
+    const body = typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body ?? {});
+    if (reply.dropAfterBody) res.write(body, () => res.socket.destroy());
+    else res.end(body);
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return {

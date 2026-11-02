@@ -1,5 +1,5 @@
-import { DASHBOARD_URL, MissingApiKeyError } from "./auth/api-key.js";
-import { V3ApiError, V3NetworkError, V3TimeoutError } from "./client.js";
+import { DASHBOARD_URL, InvalidApiKeyError, MissingApiKeyError } from "./auth/api-key.js";
+import { V3ApiError, V3InterruptedError, V3NetworkError, V3TimeoutError } from "./client.js";
 
 const DAY_SECONDS = 86_400;
 const SUPPORT_EMAIL = "support@enrichlayer.com";
@@ -7,7 +7,7 @@ const SUPPORT_EMAIL = "support@enrichlayer.com";
 export const CUT_OFF_ADVICE =
   "A call cut off before the answer arrives may still be charged. To get the copy that was saved in the meantime, call again without maxAgeSeconds; do not repeat a live lookup right away.";
 
-function details(error: V3ApiError): string {
+function details(error: V3ApiError | V3InterruptedError): string {
   const parts = [`credits charged: ${error.creditCost ?? "unknown"}`];
   if (error.requestId) parts.push(`request id: ${error.requestId}`);
   return ` (${parts.join(", ")})`;
@@ -43,9 +43,10 @@ function apiErrorMessage(error: V3ApiError): string {
 
 export function describeFailure(error: unknown): string | null {
   if (error instanceof V3ApiError) return apiErrorMessage(error) + details(error);
+  if (error instanceof V3InterruptedError) return `${error.message}. ${CUT_OFF_ADVICE}${details(error)}`;
   if (error instanceof V3TimeoutError) return `${error.message}. ${CUT_OFF_ADVICE}`;
   if (error instanceof V3NetworkError)
     return `${error.message}. Check the network connection and ENRICHLAYER_API_BASE_URL, then call again.`;
-  if (error instanceof MissingApiKeyError) return error.message;
+  if (error instanceof MissingApiKeyError || error instanceof InvalidApiKeyError) return error.message;
   return null;
 }

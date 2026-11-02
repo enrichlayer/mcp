@@ -22,6 +22,15 @@ test("a network failure and a missing key tell what to fix", () => {
   );
 });
 
+test("a request that could not be built does not repeat what fetch said about it", () => {
+  const cause = new TypeError('Headers.append: "Bearer FAKE_REVIEW_KEY\nSECOND_LINE" is an invalid header value.');
+
+  assert.equal(
+    describeFailure(new V3NetworkError("https://api.enrichlayer.com", cause)),
+    "Could not reach Enrich Layer at https://api.enrichlayer.com: the request could not be built. Check the network connection and ENRICHLAYER_API_BASE_URL, then call again.",
+  );
+});
+
 test("unknown errors are left to the MCP server", () => {
   assert.equal(describeFailure(new Error("boom")), null);
 });

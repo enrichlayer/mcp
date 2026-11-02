@@ -53,10 +53,26 @@ export class V3TimeoutError extends Error {
   }
 }
 
+function networkReason(cause: unknown): string {
+  if (cause instanceof TypeError) return "the request could not be built";
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 export class V3NetworkError extends Error {
   constructor(readonly baseUrl: string, cause: unknown) {
-    super(`Could not reach Enrich Layer at ${baseUrl}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    super(`Could not reach Enrich Layer at ${baseUrl}: ${networkReason(cause)}`);
     this.name = "V3NetworkError";
+  }
+}
+
+export class V3InterruptedError extends Error {
+  constructor(
+    readonly status: number,
+    readonly creditCost: number | null,
+    readonly requestId: string | null,
+  ) {
+    super(`The connection broke while the answer was arriving (HTTP ${status})`);
+    this.name = "V3InterruptedError";
   }
 }
 
@@ -124,7 +140,13 @@ export function createV3Client(options: ClientOptions): CallV3 {
           continue;
         }
 
-        const text = await response.text();
+        let text: string;
+        try {
+          text = await response.text();
+        } catch (error) {
+          if (abort.aborted) throw error;
+          throw new V3InterruptedError(response.status, creditCost, requestId);
+        }
         if (!response.ok) throw new V3ApiError(path, response.status, errorBody(text), creditCost, requestId);
         try {
           return { data: JSON.parse(text), creditCost, requestId };

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { apiKeyCredentials } from "../build/auth/api-key.js";
 import { connectMcp, headers, startApi, testClient } from "./helpers.mjs";
 
 const TOOL_NAMES = [
@@ -100,6 +101,43 @@ test("a rejected key comes back as a tool error that names ENRICHLAYER_API_KEY",
     result.content[0].text,
     "The API key was rejected: Invalid API key. Set ENRICHLAYER_API_KEY to a valid key from https://enrichlayer.com/dashboard and restart the MCP server. (credits charged: 0, request id: req-12)",
   );
+});
+
+test("a key with a line break inside never reaches the tool result or the network", async (t) => {
+  const api = await startApi(() => ({ body: {} }));
+  const credentials = apiKeyCredentials({ ENRICHLAYER_API_KEY: "FAKE_REVIEW_KEY\nSECOND_LINE" });
+  const mcp = await connectMcp(testClient(api.url, { credentials }));
+  t.after(async () => {
+    await mcp.close();
+    await api.close();
+  });
+
+  const result = await mcp.client.callTool({ name: "validate_email", arguments: { email: "jane@example.com" } });
+
+  assert.equal(result.isError, true);
+  assert.equal(
+    result.content[0].text,
+    "ENRICHLAYER_API_KEY contains a space, a line break or another character an API key cannot have. Paste the key again from https://enrichlayer.com/dashboard into the env of this MCP server and restart the server.",
+  );
+  assert.doesNotMatch(JSON.stringify([result.content, result.structuredContent]), /FAKE_REVIEW_KEY|SECOND_LINE/);
+  assert.equal(api.requests.length, 0);
+});
+
+test("an answer cut off after the headers keeps the cost, the request id and the advice", async (t) => {
+  const { api, client } = await setup(t, () => ({
+    body: '{"data": {"emailStatus": "va',
+    headers: headers(1, "req-15"),
+    dropAfterBody: true,
+  }));
+
+  const result = await client.callTool({ name: "validate_email", arguments: { email: "jane@example.com" } });
+
+  assert.equal(result.isError, true);
+  assert.equal(
+    result.content[0].text,
+    "The connection broke while the answer was arriving (HTTP 200). A call cut off before the answer arrives may still be charged. To get the copy that was saved in the meantime, call again without maxAgeSeconds; do not repeat a live lookup right away. (credits charged: 1, request id: req-15)",
+  );
+  assert.equal(api.requests.length, 1);
 });
 
 test("a 409 tells how old the cached copy is and how to accept it", async (t) => {
