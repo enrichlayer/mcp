@@ -162,6 +162,36 @@ A call cut off before the answer arrives may still be charged. To get the copy t
 | `ENRICHLAYER_API_KEY` | yes | — |
 | `ENRICHLAYER_API_BASE_URL` | no | `https://api.enrichlayer.com` |
 
+## Hosted connector
+
+The same tools are served over HTTP at `https://mcp.enrichlayer.com/v3/mcp`. Add that address as a remote MCP server in your client; the client opens the Enrich Layer sign-in page, where you paste your API key. Calls then spend that account's credits, as with the local server.
+
+The server behind that address is the `enrichlayer-mcp-v3-http` command of this package. It serves Streamable HTTP without sessions, so any instance can answer any request:
+
+| Path | What it does |
+| -- | -- |
+| `POST /v3/mcp` | MCP requests; needs a Bearer access token from the sign-in service |
+| `GET /.well-known/oauth-protected-resource/v3/mcp` | Tells the client where to sign in |
+| `GET /v3/health` | `{"status":"ok","version":"<version>"}` |
+
+| Variable | Required | Default |
+| -- | -- | -- |
+| `MCP_BASE_URL` | yes | — (the public origin; access tokens must be issued by it and for it) |
+| `AUTH_JWT_SECRET` | yes | — (the secret the sign-in service signs access tokens with) |
+| `PORT` | no | `3000` |
+| `ENRICHLAYER_API_BASE_URL` | no | `https://api.enrichlayer.com` |
+| `SENTRY_DSN`, `SENTRY_ENVIRONMENT` | no | errors are not reported |
+
+Each tool call writes one JSON line to stdout with the tool, the API status, `creditCost`, `requestId`, the time it took and the client name; keys, tokens and parameters are never logged.
+
+A tag `v<version>` also builds the image `ghcr.io/enrichlayer/mcp:<version>`. To build and run it locally:
+
+```bash
+docker build -t enrichlayer-mcp-v3 .
+docker run --rm -p 3000:3000 -e MCP_BASE_URL=http://localhost:3000 -e AUTH_JWT_SECRET=<secret> enrichlayer-mcp-v3
+curl http://localhost:3000/v3/health
+```
+
 ## Development
 
 ```bash
