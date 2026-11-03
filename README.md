@@ -175,7 +175,7 @@ CI checks the types and runs the tests on Node 20, 22 and 24, and fails when the
 
 `server.json` describes the server for the official MCP registry. Its name, version and package must match `package.json`; a test checks this.
 
-To release, set the version in `package.json` and `server.json` and push the tag `v<version>`. CI runs the same checks and publishes the package to npm.
+To release, set the version in `package.json` and `server.json` and push the tag `v<version>`. The tag runs the same checks and stages the version on npm; the package owner publishes it from Staged Packages on npmjs.com. Then run the Registry workflow by hand from the Actions tab to publish `server.json` to the MCP registry. The registry takes each version only once, so running the workflow again for the same version fails.
 
 ## License
 
