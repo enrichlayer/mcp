@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 
-import { createServer } from "node:http";
-import { toNodeHandler } from "@modelcontextprotocol/node";
 import { apiBaseUrl, httpConfig, VERSION } from "./config.js";
 import { createHttpApp } from "./http-app.js";
+import { startHttpServer } from "./http-server.js";
 import { initSentry, isReportable } from "./sentry.js";
 
 const SHUTDOWN_GRACE_MS = 10_000;
@@ -21,16 +20,14 @@ try {
     write: (line) => console.log(line),
     onError: report,
   });
-  const server = createServer(toNodeHandler(app, { onerror: report }));
-  server.listen(config.port, () => console.log(JSON.stringify({ event: "listening", port: config.port, version: VERSION })));
+  const { shutdown } = await startHttpServer(app, { port: config.port, graceMs: SHUTDOWN_GRACE_MS, onError: report });
+  console.log(JSON.stringify({ event: "listening", port: config.port, version: VERSION }));
 
-  const shutdown = () => {
-    server.close();
-    setTimeout(() => server.closeAllConnections(), SHUTDOWN_GRACE_MS).unref();
-    void app.close().then(() => sentry.flush());
+  const stop = () => {
+    void shutdown().then(() => sentry.flush());
   };
-  process.once("SIGTERM", shutdown);
-  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", stop);
+  process.once("SIGINT", stop);
 } catch (error) {
   console.error("Unable to start the Enrich Layer v3 MCP HTTP server:", error instanceof Error ? error.message : error);
   process.exitCode = 1;
