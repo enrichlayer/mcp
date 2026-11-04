@@ -22,6 +22,13 @@ test("a network failure and a missing key tell what to fix", () => {
   );
 });
 
+test("a network failure in the hosted connector does not point at an environment variable", () => {
+  assert.equal(
+    describeFailure(new V3NetworkError("https://api.enrichlayer.com", new Error("getaddrinfo ENOTFOUND")), { hosted: true }),
+    "Could not reach Enrich Layer at https://api.enrichlayer.com: getaddrinfo ENOTFOUND. Try again in a few minutes.",
+  );
+});
+
 test("a request that could not be built does not repeat what fetch said about it", () => {
   const cause = new TypeError('Headers.append: "Bearer FAKE_REVIEW_KEY\nSECOND_LINE" is an invalid header value.');
 

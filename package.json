@@ -6,7 +6,8 @@
   "type": "module",
   "main": "build/index.js",
   "bin": {
-    "enrichlayer-mcp-v3": "build/index.js"
+    "enrichlayer-mcp-v3": "build/index.js",
+    "enrichlayer-mcp-v3-http": "build/http.js"
   },
   "scripts": {
     "build": "tsc",
@@ -37,7 +38,10 @@
   },
   "homepage": "https://github.com/enrichlayer/mcp#readme",
   "dependencies": {
+    "@modelcontextprotocol/node": "2.1.2",
     "@modelcontextprotocol/server": "2.4.0",
+    "@sentry/node": "10.76.2",
+    "jose": "6.2.13",
     "zod": "4.6.7"
   },
   "devDependencies": {
