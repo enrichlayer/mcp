@@ -193,6 +193,28 @@ test("a failed call logs the API status, cost and request id", async (t) => {
   assert.equal(errors.length, 1);
 });
 
+test("a key the API rejects or limits tells a hosted user to sign in again, not to change the environment", async (t) => {
+  const { url } = await setup(t, (request) => ({
+    status: request.query.email === "rejected@example.com" ? 401 : 403,
+    body: { description: request.query.email === "rejected@example.com" ? "Invalid API key" : "Account has been suspended" },
+    headers: headers(0, "req-4"),
+  }));
+  const token = await signToken();
+  const call = async (email) => {
+    const response = await post(url, { ...VALIDATE, params: { ...VALIDATE.params, arguments: { email } } }, { token });
+    return lastData(await response.text()).result.content[0].text;
+  };
+
+  assert.equal(
+    await call("rejected@example.com"),
+    "The API key was rejected: Invalid API key. Reconnect Enrich Layer in your MCP client and sign in again with a valid API key from https://enrichlayer.com/dashboard. (credits charged: 0, request id: req-4)",
+  );
+  assert.equal(
+    await call("denied@example.com"),
+    "Access denied for /v3/email/validate: Account has been suspended. This key or its account cannot use this endpoint; reconnect and sign in with a key that can, or contact support@enrichlayer.com. (credits charged: 0, request id: req-4)",
+  );
+});
+
 test("the HTTP server needs MCP_BASE_URL and AUTH_JWT_SECRET", () => {
   assert.throws(() => httpConfig({}), { message: "Set MCP_BASE_URL and AUTH_JWT_SECRET to start the HTTP server." });
   assert.throws(() => httpConfig({ MCP_BASE_URL: BASE_URL }), { message: "Set AUTH_JWT_SECRET to start the HTTP server." });

@@ -13,17 +13,24 @@ function details(error: V3ApiError | V3InterruptedError): string {
   return ` (${parts.join(", ")})`;
 }
 
-function apiErrorMessage(error: V3ApiError): string {
+export interface MessageOptions {
+  hosted?: boolean;
+}
+
+function apiErrorMessage(error: V3ApiError, hosted: boolean): string {
   const reason = (error.body.description ?? error.body.name ?? `HTTP ${error.status}`).replace(/[.\s]+$/, "");
   const age = error.body.cachedProfileAgeSeconds;
 
   if (error.status === 400) return `The request was rejected as invalid: ${reason}. Fix the parameters and call again.`;
   if (error.status === 401)
-    return `The API key was rejected: ${reason}. Set ENRICHLAYER_API_KEY to a valid key from ${DASHBOARD_URL} and restart the MCP server.`;
+    return hosted
+      ? `The API key was rejected: ${reason}. Reconnect Enrich Layer in your MCP client and sign in again with a valid API key from ${DASHBOARD_URL}.`
+      : `The API key was rejected: ${reason}. Set ENRICHLAYER_API_KEY to a valid key from ${DASHBOARD_URL} and restart the MCP server.`;
   if (error.status === 403) {
     if (/insufficient credits|top.?up/i.test(reason))
       return `Not enough credits: ${reason}. Top up the account at ${DASHBOARD_URL}, then call again.`;
-    return `Access denied for ${error.path}: ${reason}. This key or its account cannot use this endpoint; use a key that can, or contact ${SUPPORT_EMAIL}.`;
+    const fix = hosted ? "reconnect and sign in with a key that can" : "use a key that can";
+    return `Access denied for ${error.path}: ${reason}. This key or its account cannot use this endpoint; ${fix}, or contact ${SUPPORT_EMAIL}.`;
   }
   if (error.status === 404)
     return `Not found: ${reason}. Check the identifier (URL, username, email or domain), or look it up by another identifier.`;
@@ -41,12 +48,14 @@ function apiErrorMessage(error: V3ApiError): string {
   return `Enrich Layer API error ${error.status}: ${reason}. Try again later; if it keeps failing, contact ${SUPPORT_EMAIL} with the request id.`;
 }
 
-export function describeFailure(error: unknown): string | null {
-  if (error instanceof V3ApiError) return apiErrorMessage(error) + details(error);
+export function describeFailure(error: unknown, { hosted = false }: MessageOptions = {}): string | null {
+  if (error instanceof V3ApiError) return apiErrorMessage(error, hosted) + details(error);
   if (error instanceof V3InterruptedError) return `${error.message}. ${CUT_OFF_ADVICE}${details(error)}`;
   if (error instanceof V3TimeoutError) return `${error.message}. ${CUT_OFF_ADVICE}`;
   if (error instanceof V3NetworkError)
-    return `${error.message}. Check the network connection and ENRICHLAYER_API_BASE_URL, then call again.`;
+    return hosted
+      ? `${error.message}. Try again in a few minutes.`
+      : `${error.message}. Check the network connection and ENRICHLAYER_API_BASE_URL, then call again.`;
   if (error instanceof MissingApiKeyError || error instanceof InvalidApiKeyError) return error.message;
   return null;
 }

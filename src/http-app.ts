@@ -62,7 +62,7 @@ export function createHttpApp(options: HttpAppOptions): HttpApp {
     });
     const logged = logCalls(callV3, options.write, options.onError);
     const httpUserAgent = requestInfo?.headers.get("user-agent") ?? undefined;
-    return createServer((request) => logged({ ...request, clientName: request.clientName ?? httpUserAgent }));
+    return createServer((request) => logged({ ...request, clientName: request.clientName ?? httpUserAgent }), { hosted: true });
   };
 
   const mcp = createMcpHandler(factory, {

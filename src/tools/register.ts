@@ -1,7 +1,7 @@
 import type { CallToolResult, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { CallV3, V3Params } from "../client.js";
-import { describeFailure } from "../errors.js";
+import { describeFailure, type MessageOptions } from "../errors.js";
 import { v3Params } from "../generated/v3-params.js";
 import { toolDefs, type ToolDef } from "./definitions.js";
 
@@ -17,7 +17,7 @@ function failure(message: string): CallToolResult {
   return { isError: true, content: [{ type: "text", text: message }] };
 }
 
-export function registerTools(server: McpServer, callV3: CallV3): void {
+export function registerTools(server: McpServer, callV3: CallV3, messages: MessageOptions = {}): void {
   for (const def of toolDefs) {
     server.registerTool(
       def.name,
@@ -43,7 +43,7 @@ export function registerTools(server: McpServer, callV3: CallV3): void {
             structuredContent: { ...result },
           };
         } catch (error) {
-          const message = describeFailure(error);
+          const message = describeFailure(error, messages);
           if (message === null) throw error;
           return failure(message);
         }
