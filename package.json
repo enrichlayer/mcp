@@ -7,6 +7,7 @@
   "main": "build/index.js",
   "bin": {
     "enrichlayer-mcp-v3": "build/index.js",
+    "mcp-server-v3": "build/index.js",
     "enrichlayer-mcp-v3-http": "build/http.js"
   },
   "scripts": {

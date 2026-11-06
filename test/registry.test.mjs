@@ -24,3 +24,9 @@ test("server.json stays within the registry schema limits", () => {
     ["ENRICHLAYER_API_KEY"],
   );
 });
+
+test("npx starts the stdio server by the package name", () => {
+  const command = pkg.name.replace(/^@[^/]+\//, "");
+  assert.ok(pkg.bin[command], `package.json has no "${command}" bin for npx -y ${pkg.name}`);
+  assert.equal(pkg.bin[command], pkg.bin["enrichlayer-mcp-v3"]);
+});
