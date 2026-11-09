@@ -19,10 +19,10 @@ export const v3Params = {
   },
   "/v3/company": {
     "url": z.string().describe("LinkedIn company or showcase page URL to look up."),
-    "fundingData": z.enum(["exclude","include"]).optional().describe("Include the funding rounds, returned in the `funding.rounds` section. Default: exclude."),
+    "fundingData": z.enum(["exclude","include"]).optional().describe("Include the funding rounds, returned in the `funding.rounds` section, and the date and type of the last round in the `funding.summary` section. Default: exclude."),
     "exitData": z.enum(["exclude","include"]).optional().describe("Include the exit events, returned in the `exits` section. Default: exclude."),
     "acquisitions": z.enum(["exclude","include"]).optional().describe("Include the companies acquired and the acquirer, returned in the `acquisitions` section. Default: exclude."),
-    "extra": z.enum(["exclude","include"]).optional().describe("Include the extra profile details: the Crunchbase URL, rounds count, total funding and investor count in the `funding.summary` section, the ticker symbol and IPO status in the `stock` section, and the contact email and Crunchbase link in the `contactInformation` section. Default: exclude."),
+    "extra": z.enum(["exclude","include"]).optional().describe("Include the extra profile details: the Crunchbase URL, rounds count, total funding and investor count in the `funding.summary` section, the ticker symbol and IPO status in the `stock` section, and the contact email and Crunchbase link in the `contactInformation` section, and the Crunchbase slug in `slug.crunchbase`. Default: exclude."),
     "activities": z.enum(["exclude","include"]).optional().describe("Include up to 100 of the most recent posts from the company page, newest first with undated posts last, returned in the `activities` section. Default: exclude."),
     "maxAgeSeconds": z.number().int().min(0).optional().describe("Maximum acceptable age of cached data, in seconds. Default: 2592000."),
   },

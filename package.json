@@ -1,12 +1,13 @@
 {
   "name": "@enrichlayer/mcp-server-v3",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "mcpName": "io.github.enrichlayer/mcp-server-v3",
   "description": "MCP server for the Enrich Layer v3 API — person and company profiles, company search and logos, work email search and email validation",
   "type": "module",
   "main": "build/index.js",
   "bin": {
     "enrichlayer-mcp-v3": "build/index.js",
+    "mcp-server-v3": "build/index.js",
     "enrichlayer-mcp-v3-http": "build/http.js"
   },
   "scripts": {
