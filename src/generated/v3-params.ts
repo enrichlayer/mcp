@@ -3,11 +3,11 @@ import { z } from "zod";
 
 export const v3Params = {
   "/v3/person": {
-    "email": z.string().optional().describe("Email address. If several identifiers are given, only the first in the order github, email, profile, facebook, twitter is used."),
-    "profile": z.string().optional().describe("LinkedIn username or profile URL. If several identifiers are given, only the first in the order github, email, profile, facebook, twitter is used."),
-    "facebook": z.string().optional().describe("Facebook username or profile URL. If several identifiers are given, only the first in the order github, email, profile, facebook, twitter is used."),
-    "twitter": z.string().optional().describe("Twitter/X username or profile URL. If several identifiers are given, only the first in the order github, email, profile, facebook, twitter is used."),
-    "github": z.string().optional().describe("GitHub username or profile URL. If several identifiers are given, only the first in the order github, email, profile, facebook, twitter is used."),
+    "email": z.string().optional().describe("Email address."),
+    "profile": z.string().optional().describe("LinkedIn username or profile URL."),
+    "facebook": z.string().optional().describe("Facebook username or profile URL."),
+    "twitter": z.string().optional().describe("Twitter/X username or profile URL."),
+    "github": z.string().optional().describe("GitHub username or profile URL."),
     "socialLink": z.enum(["exclude","include"]).optional().describe("Include the social profile URLs, returned in the `contactInformation.socialLinks` section, along with the corresponding usernames in the `slug` section. Default: exclude."),
     "phoneNumber": z.enum(["exclude","include"]).optional().describe("Include phone numbers, returned in the `contactInformation.phoneNumbers` section. Default: exclude."),
     "personalEmail": z.enum(["exclude","include"]).optional().describe("Include personal emails, returned in the `contactInformation.emails.personal` section. Default: exclude."),

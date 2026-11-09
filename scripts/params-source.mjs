@@ -31,6 +31,8 @@ export function queryParams(spec, path) {
     });
 }
 
+const SEVERAL_IDENTIFIERS_SENTENCE = /\s*If several identifiers are given[^.]*(?:\.|$)\s*/g;
+
 function zodFor(path, param) {
   let code;
   if (param.enum) {
@@ -49,7 +51,7 @@ function zodFor(path, param) {
   if (param.minimum !== undefined) code += `.min(${param.minimum})`;
   if (param.maximum !== undefined) code += `.max(${param.maximum})`;
   if (!param.required) code += ".optional()";
-  const text = param.description?.trim();
+  const text = param.description?.replace(SEVERAL_IDENTIFIERS_SENTENCE, " ").trim();
   const sentence = text && !/[.!?]$/.test(text) ? `${text}.` : text;
   const description = [sentence, param.default !== undefined ? `Default: ${param.default}.` : undefined]
     .filter(Boolean)
