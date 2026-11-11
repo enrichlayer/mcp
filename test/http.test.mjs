@@ -67,6 +67,13 @@ function lastData(sse) {
   return JSON.parse(data.at(-1).slice("data: ".length));
 }
 
+function dataMessages(sse) {
+  return sse
+    .split("\n")
+    .filter((line) => line.startsWith("data: "))
+    .map((line) => JSON.parse(line.slice("data: ".length)));
+}
+
 function challenge(error, description) {
   return `Bearer error="${error}", error_description="${description}", scope="api", resource_metadata="${METADATA_URL}"`;
 }
@@ -175,6 +182,38 @@ test("a slow call streams keep-alive comments before the result, and the HTTP Us
   assert.ok(sse.indexOf(": keepalive") !== -1 && sse.indexOf(": keepalive") < sse.indexOf("data: "));
   assert.deepEqual(lastData(sse).result.structuredContent, { data: { emailStatus: "valid" }, creditCost: 1, requestId: "req-2" });
   assert.match(api.requests[0].headers["user-agent"], /^enrichlayer-mcp-v3\/\d+\.\d+\.\d+ \(TestAgent\/1\.0\)$/);
+});
+
+test("a slow call with a progress token gets rising progress notifications before the result", async (t) => {
+  const { url } = await setup(t, () => ({ body: { emailStatus: "valid" }, headers: headers(1, "req-p1"), delayMs: 400 }), {
+    keepAliveMs: 50,
+  });
+  const token = await signToken();
+  const call = { ...VALIDATE, params: { ...VALIDATE.params, _meta: { progressToken: "call-1" } } };
+
+  const messages = dataMessages(await (await post(url, call, { token })).text());
+
+  const progress = messages.slice(0, -1);
+  assert.ok(progress.length > 0);
+  assert.deepEqual(
+    progress,
+    progress.map((_, i) => ({ jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: "call-1", progress: i + 1 } })),
+  );
+  assert.deepEqual(messages.at(-1).result.structuredContent, { data: { emailStatus: "valid" }, creditCost: 1, requestId: "req-p1" });
+});
+
+test("a slow call without a progress token gets no progress notifications", async (t) => {
+  const { url } = await setup(t, () => ({ body: { emailStatus: "valid" }, headers: headers(1, "req-p2"), delayMs: 400 }), {
+    keepAliveMs: 50,
+  });
+  const token = await signToken();
+
+  const sse = await (await post(url, VALIDATE, { token })).text();
+
+  assert.ok(sse.includes(": keepalive"));
+  const messages = dataMessages(sse);
+  assert.equal(messages.length, 1);
+  assert.deepEqual(messages[0].result.structuredContent, { data: { emailStatus: "valid" }, creditCost: 1, requestId: "req-p2" });
 });
 
 test("a failed call logs the API status, cost and request id", async (t) => {
