@@ -144,7 +144,7 @@ Errors come back as tool errors with a readable message, `creditCost`, `requestI
 
 ## Freshness and long calls
 
-`get_person_profile` and `get_company_profile` take `maxAgeSeconds`: the oldest cached copy you accept. By default it is 30 days, and the answer usually comes in seconds. A small value starts a live lookup, which is slower and costs more: it can take up to 5 minutes, and the server waits up to 305 seconds.
+`get_person_profile` and `get_company_profile` take `maxAgeSeconds`: the oldest cached copy you accept. By default it is 30 days, and the answer usually comes in seconds. A small value starts a live lookup, which is slower and costs more: it can take up to 5 minutes, and the server waits about 300 seconds for the answer.
 
 MCP clients limit how long a tool call may run. Set the limit to at least 310 seconds where the client allows it:
 

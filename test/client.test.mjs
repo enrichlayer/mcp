@@ -105,6 +105,24 @@ test("gives up with V3TimeoutError when the API does not answer in time", async 
   await assert.rejects(testClient(api.url, { timeoutMs: 100 })({ path: "/v3/person", params: { profile: "jane" } }), V3TimeoutError);
 });
 
+test("a call that fetch stops waiting for is a timeout and is not repeated", async (t) => {
+  const api = await startApi((_request, attempt) => (attempt === 1 ? { body: PERSON } : { delayMs: 1_500, body: PERSON }));
+  t.after(api.close);
+  const callV3 = testClient(api.url, { timeoutMs: 5_000 });
+  await callV3({ path: "/v3/person", params: { profile: "jane" } });
+  const dispatcherKey = Symbol.for("undici.globalDispatcher.1");
+  const builtInDispatcher = globalThis[dispatcherKey];
+  const shortHeadersWait = new builtInDispatcher.constructor({ headersTimeout: 200 });
+  globalThis[dispatcherKey] = shortHeadersWait;
+  t.after(async () => {
+    globalThis[dispatcherKey] = builtInDispatcher;
+    await shortHeadersWait.close();
+  });
+
+  await assert.rejects(callV3({ path: "/v3/person", params: { profile: "jane" } }), V3TimeoutError);
+  assert.equal(api.requests.length, 2);
+});
+
 test("a call cancelled by the MCP client rejects without a timeout error", async (t) => {
   const api = await startApi(() => ({ delayMs: 1_000, body: PERSON }));
   t.after(api.close);
