@@ -47,8 +47,8 @@ export class V3ApiError extends Error {
 }
 
 export class V3TimeoutError extends Error {
-  constructor(readonly timeoutMs: number) {
-    super(`Enrich Layer did not answer within ${Math.round(timeoutMs / 1000)} s`);
+  constructor(readonly elapsedMs: number) {
+    super(`Enrich Layer did not answer within ${Math.round(elapsedMs / 1000)} s`);
     this.name = "V3TimeoutError";
   }
 }
@@ -77,6 +77,7 @@ export class V3InterruptedError extends Error {
 }
 
 const MAX_RETRY_AFTER_MS = 30_000;
+const FETCH_HEADERS_TIMEOUT = "UND_ERR_HEADERS_TIMEOUT";
 
 function headerNumber(value: string | null): number | null {
   if (value === null || value.trim() === "") return null;
@@ -113,6 +114,7 @@ export function createV3Client(options: ClientOptions): CallV3 {
       if (value !== undefined && value !== "") query.set(key, String(value));
     }
     const url = `${options.baseUrl}${path}${query.size > 0 ? `?${query}` : ""}`;
+    const started = performance.now();
     const deadline = AbortSignal.timeout(options.timeoutMs);
     const abort = signal ? AbortSignal.any([signal, deadline]) : deadline;
 
@@ -127,7 +129,9 @@ export function createV3Client(options: ClientOptions): CallV3 {
           });
         } catch (error) {
           if (abort.aborted) throw error;
-          throw new V3NetworkError(options.baseUrl, (error as Error).cause ?? error);
+          const cause = (error as Error).cause ?? error;
+          if ((cause as { code?: unknown }).code === FETCH_HEADERS_TIMEOUT) throw new V3TimeoutError(performance.now() - started);
+          throw new V3NetworkError(options.baseUrl, cause);
         }
 
         const creditCost = headerNumber(response.headers.get("x-enrichlayer-credit-cost"));
@@ -155,7 +159,7 @@ export function createV3Client(options: ClientOptions): CallV3 {
         }
       }
     } catch (error) {
-      if (deadline.aborted && !signal?.aborted) throw new V3TimeoutError(options.timeoutMs);
+      if (deadline.aborted && !signal?.aborted) throw new V3TimeoutError(performance.now() - started);
       throw error;
     }
   };

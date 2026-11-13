@@ -144,11 +144,11 @@ Errors come back as tool errors with a readable message, `creditCost`, `requestI
 
 ## Freshness and long calls
 
-`get_person_profile` and `get_company_profile` take `maxAgeSeconds`: the oldest cached copy you accept. By default it is 30 days, and the answer usually comes in seconds. A small value starts a live lookup, which is slower and costs more: it can take up to 5 minutes, and the server waits up to 305 seconds.
+`get_person_profile` and `get_company_profile` take `maxAgeSeconds`: the oldest cached copy you accept. By default it is 30 days, and the answer usually comes in seconds. A small value starts a live lookup, which is slower and costs more: it can take up to 5 minutes, and the server waits about 300 seconds for the answer.
 
 MCP clients limit how long a tool call may run. Set the limit to at least 310 seconds where the client allows it:
 
-- **Claude Code:** `MCP_TOOL_TIMEOUT` for all servers, or a `timeout` in milliseconds for one server in `.mcp.json`.
+- **Claude Code:** nothing to set. It cuts off a call only after 5 minutes without an answer or a progress notification (30 minutes for a server it starts itself), and this server sends a progress notification every 15 seconds while it waits.
 - **Codex:** `tool_timeout_sec`, 60 seconds by default.
 - **Antigravity:** `timeoutSeconds`, 180 seconds by default.
 - **Claude Desktop, Cursor, VS Code and Windsurf** do not document a setting for this, and a long call can be cut off by the client.
