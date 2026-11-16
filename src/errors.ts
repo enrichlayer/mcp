@@ -1,4 +1,5 @@
 import { DASHBOARD_URL, InvalidApiKeyError, MissingApiKeyError } from "./auth/api-key.js";
+import { TokenExchangeError } from "./auth/exchange.js";
 import { V3ApiError, V3InterruptedError, V3NetworkError, V3TimeoutError } from "./client.js";
 
 const DAY_SECONDS = 86_400;
@@ -56,6 +57,10 @@ export function describeFailure(error: unknown, { hosted = false }: MessageOptio
     return hosted
       ? `${error.message}. Try again in a few minutes.`
       : `${error.message}. Check the network connection and ENRICHLAYER_API_BASE_URL, then call again.`;
+  if (error instanceof TokenExchangeError)
+    return error.status !== undefined && error.status < 500
+      ? `${error.message}. Reconnect Enrich Layer in your MCP client and sign in again.`
+      : `${error.message}. Try again in a few minutes.`;
   if (error instanceof MissingApiKeyError || error instanceof InvalidApiKeyError) return error.message;
   return null;
 }

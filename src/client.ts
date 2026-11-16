@@ -1,5 +1,4 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Credentials } from "./auth/api-key.js";
 
 export interface V3Result {
   data: unknown;
@@ -25,10 +24,15 @@ export interface V3Request {
 
 export type CallV3 = (request: V3Request) => Promise<V3Result>;
 
+/** The stdio API key credentials, or a hosted token's, whose header may need an exchange first. */
+export interface RequestCredentials {
+  authorization(): string | Promise<string>;
+}
+
 export interface ClientOptions {
   baseUrl: string;
   userAgent: string;
-  credentials: Credentials;
+  credentials: RequestCredentials;
   timeoutMs: number;
   retryDelaysMs: number[];
 }
@@ -107,7 +111,7 @@ export function userAgentFor(userAgent: string, clientName: string | undefined):
 
 export function createV3Client(options: ClientOptions): CallV3 {
   return async ({ path, params, signal, clientName }) => {
-    const authorization = options.credentials.authorization();
+    const authorization = await options.credentials.authorization();
     const userAgent = userAgentFor(options.userAgent, clientName);
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {

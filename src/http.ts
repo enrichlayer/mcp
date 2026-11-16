@@ -16,6 +16,7 @@ try {
   const app = createHttpApp({
     baseUrl: config.baseUrl,
     jwtSecret: config.jwtSecret,
+    issuer: config.issuer,
     apiBaseUrl: apiBaseUrl(),
     write: (line) => console.log(line),
     onError: report,

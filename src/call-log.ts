@@ -1,3 +1,4 @@
+import { TokenExchangeError } from "./auth/exchange.js";
 import { V3ApiError, V3InterruptedError, V3NetworkError, V3TimeoutError, type CallV3 } from "./client.js";
 import { toolDefs } from "./tools/definitions.js";
 
@@ -11,6 +12,7 @@ function failure(error: unknown): { status: number | string; creditCost: number 
   const status =
     error instanceof V3TimeoutError ? "timeout"
     : error instanceof V3NetworkError ? "network"
+    : error instanceof TokenExchangeError ? "exchange"
     : error instanceof Error && error.name === "AbortError" ? "cancelled"
     : "error";
   return { status, creditCost: null, requestId: null };
