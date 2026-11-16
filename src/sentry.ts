@@ -19,8 +19,7 @@ export function scrub(value: unknown, depth = 0): unknown {
 export function isReportable(error: unknown): boolean {
   if (error instanceof V3ApiError) return error.status >= 500;
   if (error instanceof V3TimeoutError) return false;
-  // A refused exchange is a revoked or expired grant, the user's to fix; an unreachable service is ours.
-  if (error instanceof TokenExchangeError) return error.status === undefined || error.status >= 500;
+  if (error instanceof TokenExchangeError) return !error.isGrantRefused;
   return !(error instanceof Error && error.name === "AbortError");
 }
 

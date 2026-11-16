@@ -138,6 +138,22 @@ test("a call cancelled by the MCP client rejects without a timeout error", async
   });
 });
 
+test("a call whose signal is already aborted never asks for the header", async (t) => {
+  const api = await startApi(() => ({ body: PERSON }));
+  t.after(api.close);
+  const controller = new AbortController();
+  controller.abort();
+  let asked = 0;
+  const credentials = { authorization: () => ((asked += 1), "Bearer test-key") };
+
+  await assert.rejects(testClient(api.url, { credentials })({ path: "/v3/person", params: { profile: "jane" }, signal: controller.signal }), {
+    name: "AbortError",
+  });
+
+  assert.equal(asked, 0);
+  assert.equal(api.requests.length, 0);
+});
+
 test("fails before any request when ENRICHLAYER_API_KEY is not set", async (t) => {
   const api = await startApi(() => ({ body: PERSON }));
   t.after(api.close);

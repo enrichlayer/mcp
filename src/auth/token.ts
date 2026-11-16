@@ -46,22 +46,30 @@ function hs256Verifier({ issuer, secret }: TokenVerifierOptions): (token: string
   };
 }
 
+function isKeySet(text: string): boolean {
+  try {
+    const { keys } = JSON.parse(text) as { keys?: unknown };
+    return Array.isArray(keys) && keys.every((key) => key !== null && typeof key === "object" && !Array.isArray(key));
+  } catch {
+    return false;
+  }
+}
+
 function es256Verifier(config: IssuerConfig): (token: string) => Promise<AuthInfo> {
   const keys = createRemoteJWKSet(issuerEndpoint(config, "/.well-known/jwks.json"), {
     // An outage of the sign-in service is a server error, not an invalid token,
     // so clients keep their valid credentials instead of signing in again.
     [customFetch]: async (url, init) => {
       let response: Response;
+      let text: string;
       try {
         response = await fetch(url, init);
+        text = await response.text();
       } catch {
         throw issuerUnavailable();
       }
-      if (response.status >= 500) {
-        await response.body?.cancel().catch(() => {});
-        throw issuerUnavailable();
-      }
-      return response;
+      if (response.status !== 200 || !isKeySet(text)) throw issuerUnavailable();
+      return new Response(text, { status: 200 });
     },
   });
   return async (token) => {
@@ -121,16 +129,16 @@ export function tokenVerifier(options: TokenVerifierOptions): OAuthTokenVerifier
   };
 }
 
-/**
- * The Authorization header for REST calls made for one verified token: the
- * API key of an HS256 token, or the exchanged token of an ES256 one. An ES256
- * token never falls back to an API key; a failed exchange fails the call.
- */
 /** Whether the request was authenticated by an exchanged ES256 token, whose user has no API key of their own. */
 export function isExchangedToken(authInfo: AuthInfo | undefined): boolean {
   return typeof authInfo?.extra?.grantId === "string";
 }
 
+/**
+ * The Authorization header for REST calls made for one verified token: the
+ * API key of an HS256 token, or the exchanged token of an ES256 one. An ES256
+ * token never falls back to an API key; a failed exchange fails the call.
+ */
 export function tokenCredentials(authInfo: AuthInfo | undefined, exchanger?: TokenExchanger): RequestCredentials {
   return {
     rejected(authorization) {

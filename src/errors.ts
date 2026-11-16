@@ -64,7 +64,7 @@ export function describeFailure(error: unknown, { hosted = false, signedIn = fal
       ? `${error.message}. Try again in a few minutes.`
       : `${error.message}. Check the network connection and ENRICHLAYER_API_BASE_URL, then call again.`;
   if (error instanceof TokenExchangeError)
-    return error.status !== undefined && error.status < 500
+    return error.isGrantRefused
       ? `${error.message}. Reconnect Enrich Layer in your MCP client and sign in again.`
       : `${error.message}. Try again in a few minutes.`;
   if (error instanceof MissingApiKeyError || error instanceof InvalidApiKeyError) return error.message;

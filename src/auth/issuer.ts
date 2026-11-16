@@ -38,6 +38,7 @@ export function issuerConfig(env: NodeJS.ProcessEnv = process.env): IssuerConfig
   if (url.protocol !== "https:" && !LOCAL_HOSTS.includes(url.hostname)) {
     throw new Error(`AUTH_ISSUER must be an https URL: ${issuer}`);
   }
+  if (issuer.endsWith("/")) throw new Error(`AUTH_ISSUER must not end with a slash: ${issuer}; it must equal the iss of the access tokens.`);
   return {
     issuer,
     mcpAudience: value("AUTH_MCP_AUDIENCE")!,

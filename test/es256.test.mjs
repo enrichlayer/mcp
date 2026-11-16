@@ -2,9 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
+import { setTimeout as sleep } from "node:timers/promises";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
-import { TokenExchangeError } from "../build/auth/exchange.js";
+import { TokenExchangeError, tokenExchanger } from "../build/auth/exchange.js";
+import { tokenCredentials } from "../build/auth/token.js";
+import { createV3Client } from "../build/client.js";
 import { httpConfig } from "../build/config.js";
 import { isReportable } from "../build/sentry.js";
 import { createHttpApp } from "../build/http-app.js";
@@ -33,17 +36,18 @@ process.env.ENRICHLAYER_API_KEY = ENV_API_KEY;
 async function startIssuer(answer = () => undefined) {
   const exchanges = [];
   const counts = { jwks: 0, redirected: 0 };
-  const state = { jwksStatus: 200, answer };
+  const state = { jwksStatus: 200, jwksBody: undefined, answer };
   const server = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
     const reply = (status, payload, extra = {}) => {
+      if (res.destroyed) return;
       res.writeHead(status, { "content-type": "application/json", ...extra });
-      res.end(JSON.stringify(payload));
+      res.end(typeof payload === "string" ? payload : JSON.stringify(payload));
     };
     if (req.url === "/.well-known/jwks.json") {
       counts.jwks++;
-      return reply(state.jwksStatus, { keys: [publicJwk] });
+      return reply(state.jwksStatus, state.jwksBody ?? { keys: [publicJwk] });
     }
     if (req.url === "/redirected-token") {
       counts.redirected++;
@@ -85,12 +89,14 @@ async function setup(t, { respond, answer, withIssuer = true } = {}) {
   const issuer = await startIssuer(answer);
   const api = await startApi(respond ?? (() => ({ body: { emailStatus: "valid" }, headers: headers(1, "req-1") })));
   const lines = [];
+  const errors = [];
   const app = createHttpApp({
     baseUrl: BASE_URL,
     jwtSecret: SECRET,
     ...(withIssuer && { issuer: issuerSettings(issuer) }),
     apiBaseUrl: api.url,
     write: (line) => lines.push(line),
+    onError: (error) => errors.push(error),
     timeoutMs: 2_000,
     retryDelaysMs: [0, 0],
   });
@@ -103,7 +109,7 @@ async function setup(t, { respond, answer, withIssuer = true } = {}) {
     await api.close();
     await issuer.close();
   });
-  return { api, issuer, lines, url: `http://127.0.0.1:${server.address().port}` };
+  return { api, issuer, lines, errors, url: `http://127.0.0.1:${server.address().port}` };
 }
 
 function signEs256(issuer, claims = {}, { header = {}, key = signingKeys.privateKey } = {}) {
@@ -225,6 +231,29 @@ test("B: an unreachable JWKS is a server error, not an invalid token", async (t)
   assert.equal(api.requests.length, 0);
 });
 
+test("B: a JWKS answer that is not 200 or not a key set is a server error, not an invalid token", async (t) => {
+  const answers = [
+    [404, undefined],
+    [429, undefined],
+    [302, undefined],
+    [200, "<html>maintenance</html>"],
+    [200, { keys: "none" }],
+    [200, { keys: [null] }],
+  ];
+
+  for (const [status, body] of answers) {
+    const { api, issuer, url } = await setup(t);
+    issuer.state.jwksStatus = status;
+    issuer.state.jwksBody = body;
+
+    const response = await post(url, VALIDATE, await signEs256(issuer));
+
+    assert.equal(response.status, 500, `${status} ${JSON.stringify(body)}`);
+    assert.equal(response.headers.get("www-authenticate"), null);
+    assert.equal(api.requests.length, 0);
+  }
+});
+
 // C. A valid ES256 token: the REST API sees only the exchanged token.
 
 test("C: a valid ES256 token is exchanged and the REST call carries the exchanged token, never an API key", async (t) => {
@@ -260,11 +289,39 @@ test("C: a failed exchange fails the call and never falls back to an API key", a
   assert.equal(result.isError, true);
   assert.equal(
     result.content[0].text,
-    "The sign-in service refused the token exchange (HTTP 400). Reconnect Enrich Layer in your MCP client and sign in again.",
+    "The sign-in service refused the token exchange (HTTP 400, invalid_grant). Reconnect Enrich Layer in your MCP client and sign in again.",
   );
   assert.equal(api.requests.length, 0);
   assert.equal(issuer.exchanges.length, 1);
   assert.equal(JSON.parse(lines[0]).status, "exchange");
+});
+
+test("C: an exchange refused for our own client or settings says to try again later and is reported, not a sign-in problem", async (t) => {
+  const refusals = [
+    [{ status: 401, body: { error: "invalid_client" } }, "HTTP 401, invalid_client"],
+    [{ status: 400, body: { error: "invalid_target" } }, "HTTP 400, invalid_target"],
+    [{ status: 400, body: { error: "unauthorized_client" } }, "HTTP 400, unauthorized_client"],
+    [{ status: 401, body: { error: "invalid_grant" } }, "HTTP 401, invalid_grant"],
+    [{ status: 400, body: { error: "Bad Request: see https://example.com/help" } }, "HTTP 400"],
+    [{ status: 400, body: "<html>bad request</html>" }, "HTTP 400"],
+  ];
+  const { api, issuer, errors, url } = await setup(t, { answer: (_, n) => refusals[n - 1][0] });
+
+  for (const [, status] of refusals) {
+    const result = await callTool(url, await signEs256(issuer));
+    assert.equal(result.content[0].text, `The sign-in service refused the token exchange (${status}). Try again in a few minutes.`);
+  }
+
+  assert.deepEqual(errors.map(isReportable), [true, true, true, true, true, true]);
+  assert.equal(api.requests.length, 0);
+});
+
+test("C: a grant the sign-in service refuses stays out of Sentry", async (t) => {
+  const { errors, issuer, url } = await setup(t, { answer: () => ({ status: 400, body: { error: "invalid_grant" } }) });
+
+  await callTool(url, await signEs256(issuer));
+
+  assert.deepEqual(errors.map(isReportable), [false]);
 });
 
 test("C: an exchange answer that is not a bearer access token fails the call", async (t) => {
@@ -354,7 +411,7 @@ test("D: an API 401 drops the cached exchanged token, so a revoked grant is refu
   assert.match(first.content[0].text, /^The sign-in was rejected: Token revoked\./);
   assert.equal(
     second.content[0].text,
-    "The sign-in service refused the token exchange (HTTP 400). Reconnect Enrich Layer in your MCP client and sign in again.",
+    "The sign-in service refused the token exchange (HTTP 400, invalid_grant). Reconnect Enrich Layer in your MCP client and sign in again.",
   );
   assert.equal(issuer.exchanges.length, 2);
   assert.equal(api.requests.length, 1);
@@ -371,6 +428,61 @@ test("D: a failed exchange is not cached; the next call exchanges again", async 
   assert.equal(second.isError, undefined);
   assert.equal(issuer.exchanges.length, 2);
   assert.deepEqual(api.requests.map((request) => request.headers.authorization), ["Bearer rest-token-2"]);
+});
+
+test("D: an exchanged token without expires_in serves its own call and is not reused", async (t) => {
+  const { api, issuer, url } = await setup(t, {
+    answer: (_, n) => ({ status: 200, body: { access_token: `no-expiry-${n}`, issued_token_type: TOKEN_TYPE, token_type: "Bearer" } }),
+  });
+  const token = await signEs256(issuer);
+
+  const first = await callTool(url, token);
+  const second = await callTool(url, token);
+
+  assert.deepEqual([first.isError, second.isError], [undefined, undefined]);
+  assert.equal(issuer.exchanges.length, 2);
+  assert.deepEqual(api.requests.map((request) => request.headers.authorization), ["Bearer no-expiry-1", "Bearer no-expiry-2"]);
+});
+
+test("D: a call ends at its own deadline while the exchange still runs, and says the API was not called", async (t) => {
+  const { api, errors, issuer, url } = await setup(t, { answer: () => sleep(3_000) });
+  const started = Date.now();
+
+  const result = await callTool(url, await signEs256(issuer));
+  const elapsed = Date.now() - started;
+
+  assert.equal(result.content[0].text, "The sign-in service did not answer within 2 s. Try again in a few minutes.");
+  assert.equal(elapsed < 2_800, true, `${elapsed} ms`);
+  assert.equal(api.requests.length, 0);
+  assert.deepEqual(errors.map(isReportable), [true]);
+});
+
+test("D: a cancelled call stops waiting at once, and the exchange it shares still serves the other call", async (t) => {
+  const issuer = await startIssuer(() => sleep(1_000));
+  const api = await startApi(() => ({ body: { emailStatus: "valid" }, headers: headers(1, "req-c") }));
+  t.after(async () => {
+    await api.close();
+    await issuer.close();
+  });
+  const exchanger = tokenExchanger(issuerSettings(issuer));
+  const authInfo = { token: await signEs256(issuer), clientId: "shared-client", scopes: ["api"], expiresAt: Date.now() / 1000 + 600, extra: { grantId: "grant-one" } };
+  const callV3 = createV3Client({ baseUrl: api.url, userAgent: "test", credentials: tokenCredentials(authInfo, exchanger), timeoutMs: 5_000, retryDelaysMs: [0, 0] });
+  const controller = new AbortController();
+  const request = { path: "/v3/email/validate", params: { email: "jane@example.com" } };
+
+  const cancelled = callV3({ ...request, signal: controller.signal });
+  const other = callV3(request);
+  const started = Date.now();
+  setTimeout(() => controller.abort(), 100);
+
+  await assert.rejects(cancelled, { name: "AbortError" });
+  const cancelledAfter = Date.now() - started;
+  const result = await other;
+
+  assert.equal(cancelledAfter < 800, true, `${cancelledAfter} ms`);
+  assert.deepEqual(result, { data: { emailStatus: "valid" }, creditCost: 1, requestId: "req-c" });
+  assert.equal(issuer.exchanges.length, 1);
+  assert.deepEqual(api.requests.map((r) => r.headers.authorization), ["Bearer rest-token-1"]);
 });
 
 test("C: API refusals advise a signed-in user to sign in again, and keep the API key advice for HS256 users", async (t) => {
@@ -407,9 +519,10 @@ test("C: API refusals advise a signed-in user to sign in again, and keep the API
   );
 });
 
-test("C: a refused exchange is not reported to Sentry; an unreachable or failing sign-in service is", () => {
-  assert.equal(isReportable(new TokenExchangeError("refused", 400)), false);
-  assert.equal(isReportable(new TokenExchangeError("refused", 401)), false);
+test("C: only a grant the sign-in service refused stays out of Sentry; every other exchange failure is reported", () => {
+  assert.equal(isReportable(new TokenExchangeError("refused", 400, "invalid_grant")), false);
+  assert.equal(isReportable(new TokenExchangeError("refused", 400)), true);
+  assert.equal(isReportable(new TokenExchangeError("refused", 401)), true);
   assert.equal(isReportable(new TokenExchangeError("down", 503)), true);
   assert.equal(isReportable(new TokenExchangeError("unreachable")), true);
 });
@@ -447,6 +560,12 @@ const FULL = {
   AUTH_MCP_CLIENT_SECRET: CLIENT_SECRET,
 };
 const SETTINGS = ["AUTH_ISSUER", "AUTH_MCP_AUDIENCE", "AUTH_API_AUDIENCE", "AUTH_MCP_CLIENT_ID", "AUTH_MCP_CLIENT_SECRET"];
+
+test("E: an AUTH_ISSUER that ends in a slash refuses to start, since it must equal the iss of the tokens", () => {
+  assert.throws(() => httpConfig({ ...FULL, AUTH_ISSUER: "https://auth.enrichlayer.com/" }), {
+    message: "AUTH_ISSUER must not end with a slash: https://auth.enrichlayer.com/; it must equal the iss of the access tokens.",
+  });
+});
 
 test("E: all five issuer settings are read together, and any partial set is refused", () => {
   assert.deepEqual(httpConfig(FULL).issuer, {

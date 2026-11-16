@@ -13,9 +13,23 @@ export class TokenExchangeError extends Error {
     message: string,
     /** The HTTP status of the refusal; undefined when the service could not be reached or answered nonsense. */
     readonly status?: number,
+    readonly code?: string,
   ) {
     super(message);
     this.name = "TokenExchangeError";
+  }
+
+  get isGrantRefused(): boolean {
+    return this.code === "invalid_grant" && this.status !== 401;
+  }
+}
+
+async function oauthErrorCode(response: Response): Promise<string | undefined> {
+  try {
+    const { error } = (await response.json()) as { error?: unknown };
+    return typeof error === "string" && /^[a-z_]{1,64}$/.test(error) ? error : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -50,7 +64,7 @@ export function tokenExchanger(config: IssuerConfig, { timeoutMs = EXCHANGE_TIME
   const formEncode = (value: string) => new URLSearchParams({ v: value }).toString().slice(2);
   const basic = Buffer.from(`${formEncode(config.clientId)}:${formEncode(config.clientSecret)}`).toString("base64");
 
-  async function exchange(subjectToken: string): Promise<{ accessToken: string; expiresIn: number }> {
+  async function exchange(subjectToken: string): Promise<{ accessToken: string; expiresIn?: number }> {
     let response: Response;
     try {
       response = await fetch(tokenUrl, {
@@ -74,9 +88,12 @@ export function tokenExchanger(config: IssuerConfig, { timeoutMs = EXCHANGE_TIME
       throw new TokenExchangeError("The sign-in service could not be reached");
     }
     if (!response.ok) {
-      // The body is not read into the error: an authorization server's answer may echo credentials.
-      await response.body?.cancel().catch(() => {});
-      throw new TokenExchangeError(`The sign-in service refused the token exchange (HTTP ${response.status})`, response.status);
+      const code = await oauthErrorCode(response);
+      throw new TokenExchangeError(
+        `The sign-in service refused the token exchange (HTTP ${response.status}${code ? `, ${code}` : ""})`,
+        response.status,
+        code,
+      );
     }
     let result: Record<string, unknown> | null;
     try {
@@ -84,6 +101,7 @@ export function tokenExchanger(config: IssuerConfig, { timeoutMs = EXCHANGE_TIME
     } catch {
       result = null;
     }
+    const expiresIn = result?.expires_in;
     if (
       !result ||
       typeof result.access_token !== "string" ||
@@ -91,13 +109,11 @@ export function tokenExchanger(config: IssuerConfig, { timeoutMs = EXCHANGE_TIME
       typeof result.token_type !== "string" ||
       result.token_type.toLowerCase() !== "bearer" ||
       result.issued_token_type !== ACCESS_TOKEN_TYPE ||
-      typeof result.expires_in !== "number" ||
-      !Number.isFinite(result.expires_in) ||
-      result.expires_in <= 0
+      (expiresIn !== undefined && (typeof expiresIn !== "number" || !Number.isFinite(expiresIn) || expiresIn <= 0))
     ) {
       throw new TokenExchangeError("The sign-in service answered the token exchange with an invalid response");
     }
-    return { accessToken: result.access_token, expiresIn: result.expires_in };
+    return { accessToken: result.access_token, expiresIn: expiresIn as number | undefined };
   }
 
   const cacheKey = (subjectToken: string, grantId: string) =>
@@ -124,6 +140,10 @@ export function tokenExchanger(config: IssuerConfig, { timeoutMs = EXCHANGE_TIME
       const entry: CacheEntry = {
         promise: exchange(subjectToken).then(
           ({ accessToken, expiresIn }) => {
+            if (expiresIn === undefined) {
+              cache.delete(key);
+              return accessToken;
+            }
             // Counted from before the request, so a slow exchange cannot extend reuse.
             entry.expiresAt = now + expiresIn * 1000 - REUSE_MARGIN_MS;
             entry.accessToken = accessToken;

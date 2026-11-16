@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { TokenExchangeError } from "./auth/exchange.js";
 
 export interface V3Result {
   data: unknown;
@@ -107,6 +108,17 @@ function errorBody(text: string): V3ErrorBody {
   return { description: text.slice(0, 300) || undefined };
 }
 
+function untilAborted<T>(value: T | Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(signal.reason);
+    signal.addEventListener("abort", stop, { once: true });
+    if (signal.aborted) stop();
+    Promise.resolve(value)
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", stop));
+  });
+}
+
 export function userAgentFor(userAgent: string, clientName: string | undefined): string {
   const name = clientName?.replace(/[^\x20-\x7e]|[()]/g, "").trim().slice(0, 64);
   return name ? `${userAgent} (${name})` : userAgent;
@@ -123,10 +135,14 @@ export function createV3Client(options: ClientOptions): CallV3 {
     const started = performance.now();
     const deadline = AbortSignal.timeout(options.timeoutMs);
     const abort = signal ? AbortSignal.any([signal, deadline]) : deadline;
+    let isSent = false;
 
     try {
       for (let attempt = 0; ; attempt++) {
-        const authorization = await options.credentials.authorization();
+        abort.throwIfAborted();
+        const authorization = await untilAborted(options.credentials.authorization(), abort);
+        abort.throwIfAborted();
+        isSent = true;
         let response: Response;
         try {
           response = await fetch(url, {
@@ -167,7 +183,11 @@ export function createV3Client(options: ClientOptions): CallV3 {
         }
       }
     } catch (error) {
-      if (deadline.aborted && !signal?.aborted) throw new V3TimeoutError(performance.now() - started);
+      if (deadline.aborted && !signal?.aborted) {
+        const elapsedMs = performance.now() - started;
+        if (!isSent) throw new TokenExchangeError(`The sign-in service did not answer within ${Math.round(elapsedMs / 1000)} s`);
+        throw new V3TimeoutError(elapsedMs);
+      }
       throw error;
     }
   };
