@@ -181,6 +181,18 @@ The server behind that address is the `enrichlayer-mcp-v3-http` command of this 
 | `PORT` | no | `3000` |
 | `ENRICHLAYER_API_BASE_URL` | no | `https://api.enrichlayer.com` |
 | `SENTRY_DSN`, `SENTRY_ENVIRONMENT` | no | errors are not reported |
+| `AUTH_ISSUER` | no | — (the sign-in service whose ES256 tokens are accepted, e.g. `https://auth.enrichlayer.com`) |
+| `AUTH_MCP_AUDIENCE` | no | — (the `aud` its access tokens carry for this server) |
+| `AUTH_API_AUDIENCE` | no | — (the audience requested for the token the REST API accepts) |
+| `AUTH_MCP_CLIENT_ID`, `AUTH_MCP_CLIENT_SECRET` | no | — (this server's client registration, used for the token exchange) |
+
+### ES256 access tokens
+
+Set all five `AUTH_*` settings above, or none of them. With none, the server accepts only the HS256 tokens signed with `AUTH_JWT_SECRET`, and the resource metadata names `MCP_BASE_URL` as the authorization server. With a partial set the server refuses to start.
+
+With all five, the server also accepts ES256 access tokens from `AUTH_ISSUER`, and the resource metadata names `AUTH_ISSUER` as the authorization server. HS256 tokens keep working beside them. The token header picks the check; any other algorithm, `none` included, gets `401`. An ES256 token must have `typ: at+jwt` and a `kid`, be signed by a key in `<AUTH_ISSUER>/.well-known/jwks.json`, carry exactly `iss` = `AUTH_ISSUER` and `aud` = `AUTH_MCP_AUDIENCE`, and carry `sub`, `client_id`, `grant_id`, `scope`, `exp`, `iat` and `jti`. If the signing keys cannot be fetched the answer is `500`, not `401`, so clients keep their tokens.
+
+An ES256 token never reaches the REST API and never stands for an API key. For each call the server exchanges it at `<AUTH_ISSUER>/token` (RFC 8693 token exchange, client credentials over HTTP Basic, `audience` = `AUTH_API_AUDIENCE`, no redirects followed) and calls the API with the token it gets back. That token is reused until 30 s before it expires, separately for every incoming token and grant. If the exchange fails, the tool call fails; a refused exchange, such as a revoked grant, tells the user to sign in again.
 
 Each tool call writes one JSON line to stdout with the tool, the API status, `creditCost`, `requestId`, the time it took and the client name; keys, tokens and parameters are never logged.
 
