@@ -16,13 +16,17 @@ function details(error: V3ApiError | V3InterruptedError): string {
 
 export interface MessageOptions {
   hosted?: boolean;
+  /** The hosted call was authorized by a sign-in, not by an API key the user pasted. */
+  signedIn?: boolean;
 }
 
-function apiErrorMessage(error: V3ApiError, hosted: boolean): string {
+function apiErrorMessage(error: V3ApiError, hosted: boolean, signedIn: boolean): string {
   const reason = (error.body.description ?? error.body.name ?? `HTTP ${error.status}`).replace(/[.\s]+$/, "");
   const age = error.body.cachedProfileAgeSeconds;
 
   if (error.status === 400) return `The request was rejected as invalid: ${reason}. Fix the parameters and call again.`;
+  if (error.status === 401 && signedIn)
+    return `The sign-in was rejected: ${reason}. Reconnect Enrich Layer in your MCP client and sign in again.`;
   if (error.status === 401)
     return hosted
       ? `The API key was rejected: ${reason}. Reconnect Enrich Layer in your MCP client and sign in again with a valid API key from ${DASHBOARD_URL}.`
@@ -30,6 +34,8 @@ function apiErrorMessage(error: V3ApiError, hosted: boolean): string {
   if (error.status === 403) {
     if (/insufficient credits|top.?up/i.test(reason))
       return `Not enough credits: ${reason}. Top up the account at ${DASHBOARD_URL}, then call again.`;
+    if (signedIn)
+      return `Access denied for ${error.path}: ${reason}. This account cannot use this endpoint; reconnect and sign in with an account that can, or contact ${SUPPORT_EMAIL}.`;
     const fix = hosted ? "reconnect and sign in with a key that can" : "use a key that can";
     return `Access denied for ${error.path}: ${reason}. This key or its account cannot use this endpoint; ${fix}, or contact ${SUPPORT_EMAIL}.`;
   }
@@ -49,8 +55,8 @@ function apiErrorMessage(error: V3ApiError, hosted: boolean): string {
   return `Enrich Layer API error ${error.status}: ${reason}. Try again later; if it keeps failing, contact ${SUPPORT_EMAIL} with the request id.`;
 }
 
-export function describeFailure(error: unknown, { hosted = false }: MessageOptions = {}): string | null {
-  if (error instanceof V3ApiError) return apiErrorMessage(error, hosted) + details(error);
+export function describeFailure(error: unknown, { hosted = false, signedIn = false }: MessageOptions = {}): string | null {
+  if (error instanceof V3ApiError) return apiErrorMessage(error, hosted, signedIn) + details(error);
   if (error instanceof V3InterruptedError) return `${error.message}. ${CUT_OFF_ADVICE}${details(error)}`;
   if (error instanceof V3TimeoutError) return `${error.message}. ${CUT_OFF_ADVICE}`;
   if (error instanceof V3NetworkError)

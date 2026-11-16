@@ -26,7 +26,10 @@ export type CallV3 = (request: V3Request) => Promise<V3Result>;
 
 /** The stdio API key credentials, or a hosted token's, whose header may need an exchange first. */
 export interface RequestCredentials {
+  /** Asked again for every attempt, so a retry never sends a token that expired during an earlier one. */
   authorization(): string | Promise<string>;
+  /** Told when the API answered 401 to this header, so a cached exchanged token is not used again. */
+  rejected?(authorization: string): void;
 }
 
 export interface ClientOptions {
@@ -111,7 +114,6 @@ export function userAgentFor(userAgent: string, clientName: string | undefined):
 
 export function createV3Client(options: ClientOptions): CallV3 {
   return async ({ path, params, signal, clientName }) => {
-    const authorization = await options.credentials.authorization();
     const userAgent = userAgentFor(options.userAgent, clientName);
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
@@ -124,6 +126,7 @@ export function createV3Client(options: ClientOptions): CallV3 {
 
     try {
       for (let attempt = 0; ; attempt++) {
+        const authorization = await options.credentials.authorization();
         let response: Response;
         try {
           response = await fetch(url, {
@@ -155,6 +158,7 @@ export function createV3Client(options: ClientOptions): CallV3 {
           if (abort.aborted) throw error;
           throw new V3InterruptedError(response.status, creditCost, requestId);
         }
+        if (response.status === 401) options.credentials.rejected?.(authorization);
         if (!response.ok) throw new V3ApiError(path, response.status, errorBody(text), creditCost, requestId);
         try {
           return { data: JSON.parse(text), creditCost, requestId };

@@ -4,7 +4,9 @@ import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
+import { TokenExchangeError } from "../build/auth/exchange.js";
 import { httpConfig } from "../build/config.js";
+import { isReportable } from "../build/sentry.js";
 import { createHttpApp } from "../build/http-app.js";
 import { headers, startApi } from "./helpers.mjs";
 
@@ -323,6 +325,93 @@ test("D: an exchanged token is not reused within 30 s of its expiry", async (t) 
 
   assert.equal(issuer.exchanges.length, 2);
   assert.deepEqual(api.requests.map((request) => request.headers.authorization), ["Bearer short-1", "Bearer short-2"]);
+});
+
+test("D: a retry after a slow failed attempt asks for the token again instead of sending an expired one", async (t) => {
+  const { api, issuer, url } = await setup(t, {
+    // expires_in 31 leaves 1 s of reuse; the first attempt outlasts it.
+    answer: (_, n) => ({ status: 200, body: { access_token: `short-${n}`, issued_token_type: TOKEN_TYPE, token_type: "Bearer", expires_in: 31 } }),
+    respond: (_, n) => (n === 1 ? { status: 503, body: {}, delayMs: 1_300 } : { body: { emailStatus: "valid" }, headers: headers(1, "req-r") }),
+  });
+
+  const result = await callTool(url, await signEs256(issuer));
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(api.requests.map((request) => request.headers.authorization), ["Bearer short-1", "Bearer short-2"]);
+  assert.equal(issuer.exchanges.length, 2);
+});
+
+test("D: an API 401 drops the cached exchanged token, so a revoked grant is refused on the next call", async (t) => {
+  const { api, issuer, url } = await setup(t, {
+    answer: (_, n) => (n === 2 ? { status: 400, body: { error: "invalid_grant" } } : undefined),
+    respond: () => ({ status: 401, body: { description: "Token revoked" }, headers: headers(0, "req-x") }),
+  });
+  const token = await signEs256(issuer);
+
+  const first = await callTool(url, token);
+  const second = await callTool(url, token);
+
+  assert.match(first.content[0].text, /^The sign-in was rejected: Token revoked\./);
+  assert.equal(
+    second.content[0].text,
+    "The sign-in service refused the token exchange (HTTP 400). Reconnect Enrich Layer in your MCP client and sign in again.",
+  );
+  assert.equal(issuer.exchanges.length, 2);
+  assert.equal(api.requests.length, 1);
+});
+
+test("D: a failed exchange is not cached; the next call exchanges again", async (t) => {
+  const { api, issuer, url } = await setup(t, { answer: (_, n) => (n === 1 ? { status: 500, body: {} } : undefined) });
+  const token = await signEs256(issuer);
+
+  const first = await callTool(url, token);
+  const second = await callTool(url, token);
+
+  assert.equal(first.isError, true);
+  assert.equal(second.isError, undefined);
+  assert.equal(issuer.exchanges.length, 2);
+  assert.deepEqual(api.requests.map((request) => request.headers.authorization), ["Bearer rest-token-2"]);
+});
+
+test("C: API refusals advise a signed-in user to sign in again, and keep the API key advice for HS256 users", async (t) => {
+  const { issuer, url } = await setup(t, {
+    respond: (request) => ({
+      status: request.query.email === "a@example.com" ? 401 : 403,
+      body: { description: request.query.email === "a@example.com" ? "Invalid credentials" : "Account has been suspended" },
+      headers: headers(0, "req-w"),
+    }),
+  });
+  const call = async (token, email) => {
+    const response = await post(url, { ...VALIDATE, params: { ...VALIDATE.params, arguments: { email } } }, token);
+    const data = (await response.text()).split("\n").filter((line) => line.startsWith("data: "));
+    return JSON.parse(data.at(-1).slice("data: ".length)).result.content[0].text;
+  };
+  const es256 = await signEs256(issuer);
+  const hs256 = await signHs256();
+
+  assert.equal(
+    await call(es256, "a@example.com"),
+    "The sign-in was rejected: Invalid credentials. Reconnect Enrich Layer in your MCP client and sign in again. (credits charged: 0, request id: req-w)",
+  );
+  assert.equal(
+    await call(es256, "b@example.com"),
+    "Access denied for /v3/email/validate: Account has been suspended. This account cannot use this endpoint; reconnect and sign in with an account that can, or contact support@enrichlayer.com. (credits charged: 0, request id: req-w)",
+  );
+  assert.equal(
+    await call(hs256, "a@example.com"),
+    "The API key was rejected: Invalid credentials. Reconnect Enrich Layer in your MCP client and sign in again with a valid API key from https://enrichlayer.com/dashboard. (credits charged: 0, request id: req-w)",
+  );
+  assert.equal(
+    await call(hs256, "b@example.com"),
+    "Access denied for /v3/email/validate: Account has been suspended. This key or its account cannot use this endpoint; reconnect and sign in with a key that can, or contact support@enrichlayer.com. (credits charged: 0, request id: req-w)",
+  );
+});
+
+test("C: a refused exchange is not reported to Sentry; an unreachable or failing sign-in service is", () => {
+  assert.equal(isReportable(new TokenExchangeError("refused", 400)), false);
+  assert.equal(isReportable(new TokenExchangeError("refused", 401)), false);
+  assert.equal(isReportable(new TokenExchangeError("down", 503)), true);
+  assert.equal(isReportable(new TokenExchangeError("unreachable")), true);
 });
 
 // E. No settings: today's behaviour; a partial set: no start.

@@ -6,7 +6,7 @@ import {
 } from "@modelcontextprotocol/server";
 import { tokenExchanger } from "./auth/exchange.js";
 import type { IssuerConfig } from "./auth/issuer.js";
-import { tokenCredentials, tokenVerifier } from "./auth/token.js";
+import { isExchangedToken, tokenCredentials, tokenVerifier } from "./auth/token.js";
 import { logCalls, type LogWriter } from "./call-log.js";
 import { createV3Client } from "./client.js";
 import { REQUEST_TIMEOUT_MS, RETRY_DELAYS_MS, SSE_KEEP_ALIVE_MS, USER_AGENT, VERSION } from "./config.js";
@@ -70,6 +70,7 @@ export function createHttpApp(options: HttpAppOptions): HttpApp {
     const httpUserAgent = requestInfo?.headers.get("user-agent") ?? undefined;
     return createServer((request) => logged({ ...request, clientName: request.clientName ?? httpUserAgent }), {
       hosted: true,
+      signedIn: isExchangedToken(authInfo),
       progressMs: options.keepAliveMs,
     });
   };

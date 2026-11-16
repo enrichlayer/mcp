@@ -22,12 +22,15 @@ export class TokenExchangeError extends Error {
 export interface TokenExchanger {
   /** The REST API access token for one incoming ES256 access token of one grant. */
   accessToken(subjectToken: string, grantId: string): Promise<string>;
+  /** Drops the cached exchange for this token and grant if it is still the given REST token, e.g. after the API refused it. */
+  forget(subjectToken: string, grantId: string, accessToken: string): void;
 }
 
 interface CacheEntry {
   promise: Promise<string>;
   // Undefined while the exchange is in flight; such entries are never evicted.
   expiresAt?: number;
+  accessToken?: string;
 }
 
 export interface ExchangeOptions {
@@ -97,9 +100,16 @@ export function tokenExchanger(config: IssuerConfig, { timeoutMs = EXCHANGE_TIME
     return { accessToken: result.access_token, expiresIn: result.expires_in };
   }
 
+  const cacheKey = (subjectToken: string, grantId: string) =>
+    JSON.stringify([grantId, createHash("sha256").update(subjectToken).digest("hex")]);
+
   return {
+    forget(subjectToken, grantId, accessToken) {
+      const key = cacheKey(subjectToken, grantId);
+      if (cache.get(key)?.accessToken === accessToken) cache.delete(key);
+    },
     accessToken(subjectToken, grantId) {
-      const key = JSON.stringify([grantId, createHash("sha256").update(subjectToken).digest("hex")]);
+      const key = cacheKey(subjectToken, grantId);
       const now = Date.now();
       for (const [cachedKey, entry] of cache) {
         if (entry.expiresAt !== undefined && entry.expiresAt <= now) cache.delete(cachedKey);
@@ -116,6 +126,7 @@ export function tokenExchanger(config: IssuerConfig, { timeoutMs = EXCHANGE_TIME
           ({ accessToken, expiresIn }) => {
             // Counted from before the request, so a slow exchange cannot extend reuse.
             entry.expiresAt = now + expiresIn * 1000 - REUSE_MARGIN_MS;
+            entry.accessToken = accessToken;
             if (entry.expiresAt <= Date.now()) cache.delete(key);
             return accessToken;
           },

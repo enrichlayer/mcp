@@ -126,8 +126,18 @@ export function tokenVerifier(options: TokenVerifierOptions): OAuthTokenVerifier
  * API key of an HS256 token, or the exchanged token of an ES256 one. An ES256
  * token never falls back to an API key; a failed exchange fails the call.
  */
+/** Whether the request was authenticated by an exchanged ES256 token, whose user has no API key of their own. */
+export function isExchangedToken(authInfo: AuthInfo | undefined): boolean {
+  return typeof authInfo?.extra?.grantId === "string";
+}
+
 export function tokenCredentials(authInfo: AuthInfo | undefined, exchanger?: TokenExchanger): RequestCredentials {
   return {
+    rejected(authorization) {
+      const grantId = authInfo?.extra?.grantId;
+      if (!authInfo || !exchanger || typeof grantId !== "string" || !authorization.startsWith("Bearer ")) return;
+      exchanger.forget(authInfo.token, grantId, authorization.slice("Bearer ".length));
+    },
     authorization() {
       const grantId = authInfo?.extra?.grantId;
       if (authInfo && typeof grantId === "string") {
