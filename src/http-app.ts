@@ -4,7 +4,9 @@ import {
   requireBearerAuth,
   type McpServerFactory,
 } from "@modelcontextprotocol/server";
-import { tokenCredentials, tokenVerifier } from "./auth/token.js";
+import { tokenExchanger } from "./auth/exchange.js";
+import type { IssuerConfig } from "./auth/issuer.js";
+import { isExchangedToken, tokenCredentials, tokenVerifier } from "./auth/token.js";
 import { logCalls, type LogWriter } from "./call-log.js";
 import { createV3Client } from "./client.js";
 import { REQUEST_TIMEOUT_MS, RETRY_DELAYS_MS, SSE_KEEP_ALIVE_MS, USER_AGENT, VERSION } from "./config.js";
@@ -19,6 +21,8 @@ const SCOPE = "api";
 export interface HttpAppOptions {
   baseUrl: string;
   jwtSecret: string;
+  /** The sign-in service whose ES256 tokens are accepted and exchanged; HS256 tokens only when unset. */
+  issuer?: IssuerConfig;
   apiBaseUrl: string;
   write: LogWriter;
   onError?: (error: unknown) => void;
@@ -41,22 +45,24 @@ export function createHttpApp(options: HttpAppOptions): HttpApp {
   const allowedHosts = [new URL(options.baseUrl).hostname, ...LOCAL_HOSTS];
   const resourceMetadata = {
     resource: options.baseUrl,
-    authorization_servers: [options.baseUrl],
+    authorization_servers: [options.issuer?.issuer ?? options.baseUrl],
     scopes_supported: [SCOPE],
     resource_name: "Enrich Layer v3 MCP Server",
     resource_documentation: "https://github.com/enrichlayer/mcp#readme",
   };
   const authenticate = requireBearerAuth({
-    verifier: tokenVerifier({ issuer: options.baseUrl, secret: options.jwtSecret }),
+    verifier: tokenVerifier({ issuer: options.baseUrl, secret: options.jwtSecret, es256: options.issuer }),
     requiredScopes: [SCOPE],
     resourceMetadataUrl: `${options.baseUrl}${RESOURCE_METADATA_PATH}`,
   });
+
+  const exchanger = options.issuer && tokenExchanger(options.issuer);
 
   const factory: McpServerFactory = ({ authInfo, requestInfo }) => {
     const callV3 = createV3Client({
       baseUrl: options.apiBaseUrl,
       userAgent: USER_AGENT,
-      credentials: tokenCredentials(authInfo),
+      credentials: tokenCredentials(authInfo, exchanger),
       timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS,
       retryDelaysMs: options.retryDelaysMs ?? RETRY_DELAYS_MS,
     });
@@ -64,6 +70,7 @@ export function createHttpApp(options: HttpAppOptions): HttpApp {
     const httpUserAgent = requestInfo?.headers.get("user-agent") ?? undefined;
     return createServer((request) => logged({ ...request, clientName: request.clientName ?? httpUserAgent }), {
       hosted: true,
+      signedIn: isExchangedToken(authInfo),
       progressMs: options.keepAliveMs,
     });
   };

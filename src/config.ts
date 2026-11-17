@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { issuerConfig, type IssuerConfig } from "./auth/issuer.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -19,6 +20,8 @@ export interface HttpConfig {
   port: number;
   baseUrl: string;
   jwtSecret: string;
+  /** Set only when all five AUTH_* issuer settings are; see issuerConfig. */
+  issuer?: IssuerConfig;
   sentryDsn?: string;
   sentryEnvironment?: string;
 }
@@ -31,10 +34,12 @@ export function httpConfig(env: NodeJS.ProcessEnv = process.env): HttpConfig {
     throw new Error(`Set ${missing.join(" and ")} to start the HTTP server.`);
   }
   if (!URL.canParse(baseUrl)) throw new Error(`MCP_BASE_URL is not a URL: ${baseUrl}`);
+  const issuer = issuerConfig(env);
   return {
     port: Number(env.PORT) || DEFAULT_HTTP_PORT,
     baseUrl,
     jwtSecret,
+    ...(issuer && { issuer }),
     sentryDsn: env.SENTRY_DSN || undefined,
     sentryEnvironment: env.SENTRY_ENVIRONMENT || undefined,
   };

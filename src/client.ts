@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Credentials } from "./auth/api-key.js";
+import { TokenExchangeError } from "./auth/exchange.js";
 
 export interface V3Result {
   data: unknown;
@@ -25,10 +25,18 @@ export interface V3Request {
 
 export type CallV3 = (request: V3Request) => Promise<V3Result>;
 
+/** The stdio API key credentials, or a hosted token's, whose header may need an exchange first. */
+export interface RequestCredentials {
+  /** Asked again for every attempt, so a retry never sends a token that expired during an earlier one. */
+  authorization(): string | Promise<string>;
+  /** Told when the API answered 401 to this header, so a cached exchanged token is not used again. */
+  rejected?(authorization: string): void;
+}
+
 export interface ClientOptions {
   baseUrl: string;
   userAgent: string;
-  credentials: Credentials;
+  credentials: RequestCredentials;
   timeoutMs: number;
   retryDelaysMs: number[];
 }
@@ -100,6 +108,17 @@ function errorBody(text: string): V3ErrorBody {
   return { description: text.slice(0, 300) || undefined };
 }
 
+function untilAborted<T>(value: T | Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(signal.reason);
+    signal.addEventListener("abort", stop, { once: true });
+    if (signal.aborted) stop();
+    Promise.resolve(value)
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", stop));
+  });
+}
+
 export function userAgentFor(userAgent: string, clientName: string | undefined): string {
   const name = clientName?.replace(/[^\x20-\x7e]|[()]/g, "").trim().slice(0, 64);
   return name ? `${userAgent} (${name})` : userAgent;
@@ -107,7 +126,6 @@ export function userAgentFor(userAgent: string, clientName: string | undefined):
 
 export function createV3Client(options: ClientOptions): CallV3 {
   return async ({ path, params, signal, clientName }) => {
-    const authorization = options.credentials.authorization();
     const userAgent = userAgentFor(options.userAgent, clientName);
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
@@ -117,9 +135,14 @@ export function createV3Client(options: ClientOptions): CallV3 {
     const started = performance.now();
     const deadline = AbortSignal.timeout(options.timeoutMs);
     const abort = signal ? AbortSignal.any([signal, deadline]) : deadline;
+    let isSent = false;
 
     try {
       for (let attempt = 0; ; attempt++) {
+        abort.throwIfAborted();
+        const authorization = await untilAborted(options.credentials.authorization(), abort);
+        abort.throwIfAborted();
+        isSent = true;
         let response: Response;
         try {
           response = await fetch(url, {
@@ -151,6 +174,7 @@ export function createV3Client(options: ClientOptions): CallV3 {
           if (abort.aborted) throw error;
           throw new V3InterruptedError(response.status, creditCost, requestId);
         }
+        if (response.status === 401) options.credentials.rejected?.(authorization);
         if (!response.ok) throw new V3ApiError(path, response.status, errorBody(text), creditCost, requestId);
         try {
           return { data: JSON.parse(text), creditCost, requestId };
@@ -159,7 +183,11 @@ export function createV3Client(options: ClientOptions): CallV3 {
         }
       }
     } catch (error) {
-      if (deadline.aborted && !signal?.aborted) throw new V3TimeoutError(performance.now() - started);
+      if (deadline.aborted && !signal?.aborted) {
+        const elapsedMs = performance.now() - started;
+        if (!isSent) throw new TokenExchangeError(`The sign-in service did not answer within ${Math.round(elapsedMs / 1000)} s`);
+        throw new V3TimeoutError(elapsedMs);
+      }
       throw error;
     }
   };
