@@ -8,12 +8,12 @@
     "source": "github"
   },
   "websiteUrl": "https://enrichlayer.com",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@enrichlayer/mcp-server-v3",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "transport": {
         "type": "stdio"
       },
