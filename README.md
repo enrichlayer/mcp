@@ -20,6 +20,28 @@ This is a separate server from the v2 one ([`@enrichlayer/mcp-server`](https://w
 
 Most clients keep the key in their config file, so keep that file private. VS Code asks for the key instead and stores it for you.
 
+### Claude Code
+
+```bash
+claude mcp add --env ENRICHLAYER_API_KEY=<your API key> --transport stdio enrichlayer-v3 -- npx -y @enrichlayer/mcp-server-v3
+```
+
+### Codex
+
+```bash
+codex mcp add enrichlayer-v3 --env ENRICHLAYER_API_KEY=<your API key> -- npx -y @enrichlayer/mcp-server-v3
+```
+
+Codex stops a tool call after 60 seconds by default. Raise the limit in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.enrichlayer-v3]
+command = "npx"
+args = ["-y", "@enrichlayer/mcp-server-v3"]
+env = { ENRICHLAYER_API_KEY = "<your API key>" }
+tool_timeout_sec = 310
+```
+
 ### Cursor
 
 [![Add Enrich Layer v3 to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/install-mcp?name=enrichlayer-v3&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBlbnJpY2hsYXllci9tY3Atc2VydmVyLXYzIl0sImVudiI6eyJFTlJJQ0hMQVlFUl9BUElfS0VZIjoiPHlvdXIgQVBJIGtleT4ifX0%3D)
@@ -39,6 +61,10 @@ To add it by hand, put this block into `~/.cursor/mcp.json` (all projects) or `.
   }
 }
 ```
+
+### Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) and add the same `mcpServers` block as for Cursor. Quit and reopen Claude Desktop. Server logs are in `~/Library/Logs/Claude/mcp-server-enrichlayer-v3.log` on macOS.
 
 ### VS Code
 
@@ -64,36 +90,6 @@ To add it by hand, put this into `.vscode/mcp.json` in the workspace, or into th
 }
 ```
 
-### Claude Desktop
-
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) and add the same `mcpServers` block as for Cursor. Quit and reopen Claude Desktop. Server logs are in `~/Library/Logs/Claude/mcp-server-enrichlayer-v3.log` on macOS.
-
-### Claude Code
-
-```bash
-claude mcp add --env ENRICHLAYER_API_KEY=<your API key> --transport stdio enrichlayer-v3 -- npx -y @enrichlayer/mcp-server-v3
-```
-
-### Codex
-
-```bash
-codex mcp add enrichlayer-v3 --env ENRICHLAYER_API_KEY=<your API key> -- npx -y @enrichlayer/mcp-server-v3
-```
-
-Codex stops a tool call after 60 seconds by default. Raise the limit in `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.enrichlayer-v3]
-command = "npx"
-args = ["-y", "@enrichlayer/mcp-server-v3"]
-env = { ENRICHLAYER_API_KEY = "<your API key>" }
-tool_timeout_sec = 310
-```
-
-### Windsurf
-
-Add the same `mcpServers` block as for Cursor to the MCP config file named in the [Windsurf MCP docs](https://docs.devin.ai/windsurf/plugins/cascade/mcp): `~/.config/devin/mcp_config.json` on macOS and Linux, `%AppData%/devin/mcp_config.json` on Windows. Cascade opens this file with its "Open MCP config file" action. Instead of the key itself you can write `${env:ENRICHLAYER_API_KEY}` there and keep the key in your environment.
-
 ### Antigravity
 
 Open the `…` menu of the agent panel → **MCP Servers** → **Manage MCP Servers** → **View raw config**, or edit `~/.gemini/config/mcp_config.json` (`.agents/mcp_config.json` for one workspace). Add the same `mcpServers` block as for Cursor, with a longer tool call limit — Antigravity's default is 180 seconds:
@@ -110,6 +106,10 @@ Open the `…` menu of the agent panel → **MCP Servers** → **Manage MCP Serv
   }
 }
 ```
+
+### Windsurf
+
+Add the same `mcpServers` block as for Cursor to the MCP config file named in the [Windsurf MCP docs](https://docs.devin.ai/windsurf/plugins/cascade/mcp): `~/.config/devin/mcp_config.json` on macOS and Linux, `%AppData%/devin/mcp_config.json` on Windows. Cascade opens this file with its "Open MCP config file" action. Instead of the key itself you can write `${env:ENRICHLAYER_API_KEY}` there and keep the key in your environment.
 
 ## Tools
 
@@ -151,7 +151,7 @@ MCP clients limit how long a tool call may run. Set the limit to at least 310 se
 - **Claude Code:** nothing to set. It cuts off a call only after 5 minutes without an answer or a progress notification (30 minutes for a server it starts itself), and this server sends a progress notification every 15 seconds while it waits.
 - **Codex:** `tool_timeout_sec`, 60 seconds by default.
 - **Antigravity:** `timeoutSeconds`, 180 seconds by default.
-- **Claude Desktop, Cursor, VS Code and Windsurf** do not document a setting for this, and a long call can be cut off by the client.
+- **Cursor, Claude Desktop, VS Code and Windsurf** do not document a setting for this, and a long call can be cut off by the client.
 
 A call cut off before the answer arrives may still be charged. To get the copy that was saved in the meantime, call again without `maxAgeSeconds`; do not repeat a live lookup right away.
 
