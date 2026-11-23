@@ -2,31 +2,49 @@
 
 An [MCP](https://modelcontextprotocol.io) server for the Enrich Layer v3 API on `api.enrichlayer.com`. It gives an AI agent six tools: person and company profiles, company search, company logos, work email search and email validation.
 
+The hosted server at `https://mcp.enrichlayer.com/v3/mcp` needs nothing installed: add the address to your client and sign in with your Enrich Layer account. You can also run the server on your own machine with an API key.
+
 This is a separate server from the v2 one ([`@enrichlayer/mcp-server`](https://www.npmjs.com/package/@enrichlayer/mcp-server)), which keeps working as before.
 
 ## Requirements
 
-- Node.js 20.3 or later.
-- An Enrich Layer API key.
+- An Enrich Layer account.
+- For the local server: Node.js 20.3 or later and an Enrich Layer API key.
 
-## API key, account and credits
+## Account and credits
 
-- **Get a key:** log in at [enrichlayer.com/dashboard](https://enrichlayer.com/dashboard), open the API Key tab and copy the key.
-- **Whose credits:** the server works under the account whose key is set in `ENRICHLAYER_API_KEY`. Every successful call is charged to that account; the result shows the credits charged in `creditCost`. Calls that end in an error are not charged.
-- **A separate account for an agent:** a person creates an Enrich Layer account on the website, tops it up, copies its API key and puts the key into the agent's MCP config. The person owns the account and its credits.
+- **Whose credits:** the server works under the Enrich Layer account you sign in with or, for the local server, the account whose key is set in `ENRICHLAYER_API_KEY`. Every successful call is charged to that account; the result shows the credits charged in `creditCost`. Calls that end in an error are not charged.
+- **Get a key (local server only):** log in at [enrichlayer.com/dashboard](https://enrichlayer.com/dashboard), open the API Key tab and copy the key.
+- **A separate account for an agent:** a person creates an Enrich Layer account on the website and tops it up, then signs in with it in the agent's client or, for the local server, puts its API key into the agent's MCP config. The person owns the account and its credits.
 - **Rate limit:** the limit is counted per account. New accounts have a very small limit until their first payment.
 
 ## Install
 
+### Hosted server
+
+Add `https://mcp.enrichlayer.com/v3/mcp` to your client as a remote MCP server named `enrichlayer-v3`. Your client sends you to the Enrich Layer sign-in page at `auth.enrichlayer.com`: sign in, choose the account to use and confirm the access. No API key is needed, and calls spend the chosen account's credits.
+
+- **Claude Code:** `claude mcp add --scope user --transport http enrichlayer-v3 https://mcp.enrichlayer.com/v3/mcp`, then sign in with `/mcp` in Claude Code or `claude mcp login enrichlayer-v3` in your shell.
+- **Codex:** `codex mcp add enrichlayer-v3 --url https://mcp.enrichlayer.com/v3/mcp`, then sign in with `codex mcp login enrichlayer-v3`. Codex stops a tool call after 60 seconds by default: add `tool_timeout_sec = 310` under `[mcp_servers.enrichlayer-v3]` in `~/.codex/config.toml`.
+- **Cursor:** add `"enrichlayer-v3": { "url": "https://mcp.enrichlayer.com/v3/mcp" }` to `mcpServers` in `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (one project).
+- **Claude Desktop:** **Customize** → **Connectors** → **+ Add** → **Add custom connector**, then enter `enrichlayer-v3` as the name and the address above. On Team and Enterprise plans an owner adds the connector for the organization.
+- **VS Code:** `code --add-mcp '{"name":"enrichlayer-v3","type":"http","url":"https://mcp.enrichlayer.com/v3/mcp"}'`.
+- **Antigravity:** add `"enrichlayer-v3": { "serverUrl": "https://mcp.enrichlayer.com/v3/mcp", "timeoutSeconds": 310 }` to `mcpServers` in `~/.gemini/config/mcp_config.json` (`.agents/mcp_config.json` for one workspace). In the Antigravity app, sign in with **Authenticate** next to the server under **Customizations** → **Installed**.
+- **Windsurf:** add `"enrichlayer-v3": { "serverUrl": "https://mcp.enrichlayer.com/v3/mcp" }` to `mcpServers` in `~/.config/devin/mcp_config.json` on macOS and Linux, `%AppData%/devin/mcp_config.json` on Windows.
+
+### Local server with an API key
+
+Both servers are named `enrichlayer-v3`, so a client keeps one of them under that name: to move from the local server to the hosted one, remove the local entry first.
+
 Most clients keep the key in their config file, so keep that file private. VS Code asks for the key instead and stores it for you.
 
-### Claude Code
+#### Claude Code
 
 ```bash
 claude mcp add --env ENRICHLAYER_API_KEY=<your API key> --transport stdio enrichlayer-v3 -- npx -y @enrichlayer/mcp-server-v3
 ```
 
-### Codex
+#### Codex
 
 ```bash
 codex mcp add enrichlayer-v3 --env ENRICHLAYER_API_KEY=<your API key> -- npx -y @enrichlayer/mcp-server-v3
@@ -42,7 +60,7 @@ env = { ENRICHLAYER_API_KEY = "<your API key>" }
 tool_timeout_sec = 310
 ```
 
-### Cursor
+#### Cursor
 
 [![Add Enrich Layer v3 to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/install-mcp?name=enrichlayer-v3&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBlbnJpY2hsYXllci9tY3Atc2VydmVyLXYzIl0sImVudiI6eyJFTlJJQ0hMQVlFUl9BUElfS0VZIjoiPHlvdXIgQVBJIGtleT4ifX0%3D)
 
@@ -62,11 +80,11 @@ To add it by hand, put this block into `~/.cursor/mcp.json` (all projects) or `.
 }
 ```
 
-### Claude Desktop
+#### Claude Desktop
 
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) and add the same `mcpServers` block as for Cursor. Quit and reopen Claude Desktop. Server logs are in `~/Library/Logs/Claude/mcp-server-enrichlayer-v3.log` on macOS.
 
-### VS Code
+#### VS Code
 
 [Install Enrich Layer v3 in VS Code](https://vscode.dev/redirect/mcp/install?name=enrichlayer-v3&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22enrichlayer-api-key%22%2C%22description%22%3A%22Enrich%20Layer%20API%20key%22%2C%22password%22%3Atrue%7D%5D&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40enrichlayer%2Fmcp-server-v3%22%5D%2C%22env%22%3A%7B%22ENRICHLAYER_API_KEY%22%3A%22%24%7Binput%3Aenrichlayer-api-key%7D%22%7D%7D)
 
@@ -90,7 +108,7 @@ To add it by hand, put this into `.vscode/mcp.json` in the workspace, or into th
 }
 ```
 
-### Antigravity
+#### Antigravity
 
 Open the `…` menu of the agent panel → **MCP Servers** → **Manage MCP Servers** → **View raw config**, or edit `~/.gemini/config/mcp_config.json` (`.agents/mcp_config.json` for one workspace). Add the same `mcpServers` block as for Cursor, with a longer tool call limit — Antigravity's default is 180 seconds:
 
@@ -107,7 +125,7 @@ Open the `…` menu of the agent panel → **MCP Servers** → **Manage MCP Serv
 }
 ```
 
-### Windsurf
+#### Windsurf
 
 Add the same `mcpServers` block as for Cursor to the MCP config file named in the [Windsurf MCP docs](https://docs.devin.ai/windsurf/plugins/cascade/mcp): `~/.config/devin/mcp_config.json` on macOS and Linux, `%AppData%/devin/mcp_config.json` on Windows. Cascade opens this file with its "Open MCP config file" action. Instead of the key itself you can write `${env:ENRICHLAYER_API_KEY}` there and keep the key in your environment.
 
@@ -164,9 +182,9 @@ A call cut off before the answer arrives may still be charged. To get the copy t
 
 ## Hosted connector
 
-The same tools are served over HTTP at `https://mcp.enrichlayer.com/v3/mcp`. Add that address as a remote MCP server in your client; the client opens the Enrich Layer sign-in page, where you paste your API key. Calls then spend that account's credits, as with the local server.
+This section is for running the HTTP server yourself. To use the hosted server, see [Hosted server](#hosted-server).
 
-The server behind that address is the `enrichlayer-mcp-v3-http` command of this package. It serves Streamable HTTP without sessions, so any instance can answer any request:
+The server behind `https://mcp.enrichlayer.com/v3/mcp` is the `enrichlayer-mcp-v3-http` command of this package. It serves Streamable HTTP without sessions, so any instance can answer any request:
 
 | Path | What it does |
 | -- | -- |
