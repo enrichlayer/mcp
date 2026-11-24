@@ -2,13 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PAGE_BYTES } from "../build/config.js";
 import { compact } from "../build/fit/compact.js";
-import { encodeCursor, readCursor } from "../build/fit/cursor.js";
+import { encodeCursor, fingerprint, readCursor } from "../build/fit/cursor.js";
 import { CHANGED_NOTE, MORE_NOTE, firstPage, nextPage } from "../build/fit/pages.js";
 import { bigCompany, bigPerson } from "./big-answers.mjs";
 
 const bytes = (value) => Buffer.byteLength(JSON.stringify(value));
 const answer = (data, creditCost = 1, requestId = "0123456789abcdef0123456789abcdef") => ({ data, creditCost, requestId });
 const COMPANY_ARGS = { url: "https://www.linkedin.com/company/example-corp" };
+const TEXT_UNIT = `👨‍👩‍👧‍👦 Zürich é 東京 "quoted" \n`;
+const UNIT_STARTS = new Set([...new Intl.Segmenter("en", { granularity: "grapheme" }).segment(TEXT_UNIT)].map((part) => part.index));
+const isGraphemeStart = (position) => UNIT_STARTS.has(position % TEXT_UNIT.length);
 
 function readEverything(first, fresh) {
   const lists = new Map();
@@ -142,10 +145,8 @@ test("an item bigger than a page comes alone, with its long parts in its own mor
 });
 
 test("a long text is cut on whole graphemes, and one grapheme longer than a page on whole code points", () => {
-  const family = "👨‍👩‍👧‍👦";
-  const accented = "é";
   const data = bigCompany({ points: 5, affiliates: 2, locations: 2 });
-  data.description = `${family} Zürich ${accented} 東京 "quoted" \n`.repeat(3000);
+  data.description = TEXT_UNIT.repeat(3000);
   data.tagline = `a${"\u{1D167}".repeat(15000)}`;
   const fresh = answer(data);
   const first = firstPage(fresh, { kind: "c", args: COMPANY_ARGS, budget: PAGE_BYTES });
@@ -154,13 +155,11 @@ test("a long text is cut on whole graphemes, and one grapheme longer than a page
 
   assert.deepEqual(Object.keys(first.more), ["tagline", "description"]);
   assert.deepEqual(rebuilt, compact(data));
-  const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
-  const boundaries = new Set([...segmenter.segment(data.description)].map((part) => part.index));
   const descriptionPages = pages.filter((page) => page.path === "description");
   assert.ok(descriptionPages.length > 1);
   for (const page of descriptionPages) {
     assert.ok(bytes(page) <= PAGE_BYTES);
-    assert.equal(boundaries.has(page.from), true, `page starts at ${page.from}`);
+    assert.equal(isGraphemeStart(page.from), true, `page starts at ${page.from}`);
   }
   const taglinePages = pages.filter((page) => page.path === "tagline");
   assert.ok(taglinePages.length > 1);
@@ -168,6 +167,33 @@ test("a long text is cut on whole graphemes, and one grapheme longer than a page
     assert.ok(bytes(page) <= PAGE_BYTES);
     assert.equal(page.text.isWellFormed(), true);
   }
+});
+
+function cutDeepIn(text, from) {
+  const seen = [];
+  const segment = Intl.Segmenter.prototype.segment;
+  Intl.Segmenter.prototype.segment = function (input) {
+    seen.push(input.length);
+    return segment.call(this, input);
+  };
+  try {
+    const cursor = { v: 1, t: "c", a: COMPANY_ARGS, p: "description", o: from, h: fingerprint(text.slice(0, from)) };
+    return { page: nextPage(answer({ description: text }), cursor, { budget: PAGE_BYTES }), seen };
+  } finally {
+    Intl.Segmenter.prototype.segment = segment;
+  }
+}
+
+test("a page deep in a long text is cut by looking at that page only, however long the text is", () => {
+  const from = TEXT_UNIT.length * 2000;
+
+  const short = cutDeepIn(TEXT_UNIT.repeat(3000), from);
+  const long = cutDeepIn(TEXT_UNIT.repeat(28000), from);
+
+  assert.equal(long.page.text, short.page.text);
+  assert.deepEqual(long.seen, short.seen);
+  assert.equal(isGraphemeStart(from + long.page.text.length), true);
+  assert.ok(bytes(long.page) <= PAGE_BYTES);
 });
 
 test("a list of strings with quotes and line breaks is measured as written", () => {

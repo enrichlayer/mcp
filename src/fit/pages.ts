@@ -51,6 +51,7 @@ type Wrap = (node: Record<string, unknown>, more: More) => unknown;
 const ROOT_KEY = "data";
 const MAX_FINGERPRINT = "AAAAAAAA";
 const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
+const LOOKAHEAD = 32;
 
 const size = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -148,24 +149,16 @@ function listEnd(list: unknown[], from: number, used: number, budget: number): n
 
 function textEnd(text: string, from: number, used: number, budget: number): number {
   let end = from;
-  for (const { segment } of segmenter.segment(text.slice(from))) {
-    const add = size(segment) - 2;
-    if (used + add <= budget) {
-      used += add;
-      end += segment.length;
-      continue;
-    }
-    if (end === from) {
-      for (const point of segment) {
-        const step = size(point) - 2;
-        if (used + step > budget) break;
-        used += step;
-        end += point.length;
-      }
-    }
-    break;
+  while (end < text.length) {
+    const step = text.codePointAt(end)! > 0xffff ? 2 : 1;
+    const add = size(text.slice(end, end + step)) - 2;
+    if (used + add > budget) break;
+    used += add;
+    end += step;
   }
-  return end;
+  if (end === text.length) return end;
+  const start = from + segmenter.segment(text.slice(from, end + LOOKAHEAD)).containing(end - from)!.index;
+  return start > from ? start : end;
 }
 
 function endOf(value: unknown[] | string, cursor: Cursor, from: number, budget: number, money: Money, extra: Extra): number {
