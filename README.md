@@ -139,24 +139,31 @@ Add the same `mcpServers` block as for Cursor to the MCP config file named in th
 | `search_company_logos` | `GET /v3/company/logo` | Companies matching a name or domain (`q`), with logo URLs. |
 | `find_work_emails` | `GET /v3/email/prospect` | Work email candidates for `full_name`, or `first_name` and/or `last_name`, at a company `domain`. |
 | `validate_email` | `GET /v3/email/validate` | Whether one email address is deliverable. |
+| `get_more` | — | One page of a list left out of a long answer, by cursor; every page is a new, charged lookup. |
 
 The input schemas are generated from the published v3 OpenAPI spec, so parameter names and allowed values are the ones v3 accepts.
 
-Ask only for the sections you need. A full person profile can be long: Claude Code warns above 10,000 tokens of tool output and cuts it at 25,000 by default (raise `MAX_MCP_OUTPUT_TOKENS` if you need more).
+Ask only for the sections you need: each one adds data, and most add to the cost. Every answer fits in 24,000 bytes, within the tool output limits of Claude Code, Codex, Claude Desktop and claude.ai; a longer profile comes as a first page with `more`, and `get_more` reads the rest page by page, each page charged as a new lookup (see [Large answers](#large-answers)).
 
 ### Email addresses
 
-- `get_person_profile` with `personalEmail` or `workEmail` returns only addresses validated as deliverable. To find someone's work email from a profile URL, pass `profile` and `workEmail: "include"`; if `contactInformation.emails.work` is empty, `find_work_emails` with the person's name and company domain may still find candidates.
+- `get_person_profile` with `personalEmail` or `workEmail` returns only addresses validated as deliverable. To find someone's work email from a profile URL, pass `profile` and `workEmail: "include"`; if `contactInformation.emails.work` is missing, `find_work_emails` with the person's name and company domain may still find candidates.
 - `find_work_emails` returns candidates, each with a validation verdict in `validity`; only `valid` is confirmed deliverable.
 - `validate_email` returns the verdict in `emailStatus`.
 
 ## What a call returns
 
-- `data` — the full v3 answer, unchanged.
+- `data` — the v3 answer, with fields that have no value (null, empty lists, empty objects, empty text) left out. For an optional section, a missing field means it found nothing or was not asked for.
 - `creditCost` — credits charged for the call, from the `X-EnrichLayer-Credit-Cost` header.
 - `requestId` — the `X-Request-Id` of the call; quote it to support.
 
 The result comes as MCP structured content and as the same JSON in a text block.
+
+### Large answers
+
+An answer is never longer than 24,000 bytes. When a profile is longer, `data` keeps every field and every list that fits, and each list it leaves out is named in `more` with its number of items (`items`), its approximate size (`approxChars`), its number of pages (`pages`) and a `cursor`. A list that is in `data` is always complete.
+
+Pass the `cursor` to `get_more` to read the list one page at a time. Every page is a new lookup of the same profile from the cached copy, asking only for the section that holds the list, so it is charged like that lookup; the page gives the charge in `creditCost` and ends with `nextCursor`, which is null after the last page. For the few profiles the source can serve only live, a page costs more. The server keeps nothing between calls, so pages work on every server of the hosted service. If the list changed since the earlier pages, the page says so and gives `restartCursor`.
 
 Errors come back as tool errors with a readable message, `creditCost`, `requestId` and the next step to take: invalid parameters (400), an invalid or missing key (401), not enough credits or no access (403), not found (404), no copy fresh enough (409, with the age of the newest cached copy), rate limit (429) and service errors (5xx). The server retries 429 and 5xx twice before it reports them.
 

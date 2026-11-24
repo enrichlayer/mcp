@@ -21,7 +21,7 @@ function failure(error: unknown): { status: number | string; creditCost: number 
 export function logCalls(callV3: CallV3, write: LogWriter, onError?: (error: unknown) => void): CallV3 {
   return async (request) => {
     const started = performance.now();
-    const entry = { tool: toolByPath.get(request.path) ?? request.path, client: request.clientName?.slice(0, 64) ?? null };
+    const entry = { tool: request.tool ?? toolByPath.get(request.path) ?? request.path, client: request.clientName?.slice(0, 64) ?? null };
     const elapsed = () => Math.round(performance.now() - started);
     try {
       const result = await callV3(request);
