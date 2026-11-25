@@ -8,6 +8,8 @@ export const USER_AGENT = `enrichlayer-mcp-v3/${version}`;
 export const DEFAULT_API_BASE_URL = "https://api.enrichlayer.com";
 export const REQUEST_TIMEOUT_MS = 305_000;
 export const RETRY_DELAYS_MS = [1_000, 3_000];
+export const PAGE_BYTES = 24_000;
+export const CACHE_ONLY_MAX_AGE_SECONDS = 3_153_600_000;
 
 export function apiBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   return (env.ENRICHLAYER_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/+$/, "");

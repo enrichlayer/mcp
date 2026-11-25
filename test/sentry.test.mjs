@@ -28,3 +28,9 @@ test("events lose secrets by key name and by value", () => {
     extra: { api_key: "[REDACTED]", tool: "validate_email" },
   });
 });
+
+test("events lose page cursors by key name", () => {
+  const event = { extra: { cursor: "eyJ2IjoxfQ", page: { nextCursor: "eyJ2IjoyfQ", restartCursor: "eyJ2IjozfQ", path: "locations" } } };
+
+  assert.deepEqual(scrub(event), { extra: { cursor: "[REDACTED]", page: { nextCursor: "[REDACTED]", restartCursor: "[REDACTED]", path: "locations" } } });
+});

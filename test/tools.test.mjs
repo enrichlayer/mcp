@@ -26,21 +26,39 @@ async function setup(t, respond) {
   return { api, client: mcp.client };
 }
 
-test("lists the six v3 tools as read-only, with input and output schemas", async (t) => {
+test("lists the six v3 tools and get_more as read-only, with input and output schemas", async (t) => {
   const { client } = await setup(t, () => ({ body: {} }));
 
   const { tools } = await client.listTools();
 
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), [...TOOL_NAMES].sort());
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), [...TOOL_NAMES, "get_more"].sort());
   for (const tool of tools) {
     assert.equal(tool.annotations.readOnlyHint, true);
     assert.equal(tool.inputSchema.type, "object");
-    assert.deepEqual(Object.keys(tool.outputSchema.properties).sort(), ["creditCost", "data", "requestId"]);
     assert.doesNotMatch(tool.description, /\bcredits? (each|per)\b|\$\d/);
+    const fields = Object.keys(tool.outputSchema.properties).sort();
+    if (tool.name === "get_more") {
+      assert.deepEqual(Object.keys(tool.inputSchema.properties), ["cursor"]);
+      assert.deepEqual(fields, ["changed", "chars", "creditCost", "from", "items", "list", "more", "nextCursor", "note", "path", "requestId", "restartCursor", "text"]);
+    } else {
+      assert.deepEqual(fields, ["creditCost", "data", "more", "note", "requestId"]);
+    }
   }
 });
 
-test("get_person_profile returns the full answer, the cost and the request id, also as JSON text", async (t) => {
+test("fields with no value are left out of data, in the structured result and in the text", async (t) => {
+  const { client } = await setup(t, () => ({
+    body: { emailStatus: "valid", isDomainCatchall: null, mxRecords: [], company: { name: "Example", hq: { state: null } } },
+    headers: headers(1, "req-16"),
+  }));
+
+  const result = await client.callTool({ name: "validate_email", arguments: { email: "jane@example.com" } });
+
+  assert.deepEqual(result.structuredContent, { data: { emailStatus: "valid", company: { name: "Example" } }, creditCost: 1, requestId: "req-16" });
+  assert.deepEqual(JSON.parse(result.content[0].text), result.structuredContent);
+});
+
+test("get_person_profile returns the answer, the cost and the request id, also as JSON text", async (t) => {
   const { api, client } = await setup(t, () => ({ body: PERSON, headers: headers(1, "req-10") }));
 
   const result = await client.callTool({

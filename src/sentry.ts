@@ -3,7 +3,7 @@ import { TokenExchangeError } from "./auth/exchange.js";
 import { V3ApiError, V3TimeoutError } from "./client.js";
 
 const REDACTED = "[REDACTED]";
-const SECRET_KEY = /api[_ -]?key|authorization|cookie|credential|password|secret|token/i;
+const SECRET_KEY = /api[_ -]?key|authorization|cookie|credential|password|secret|token|cursor/i;
 const SECRET_VALUES = [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi];
 
 export function scrub(value: unknown, depth = 0): unknown {

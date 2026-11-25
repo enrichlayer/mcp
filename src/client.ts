@@ -21,6 +21,7 @@ export interface V3Request {
   params: V3Params;
   signal?: AbortSignal;
   clientName?: string;
+  tool?: string;
 }
 
 export type CallV3 = (request: V3Request) => Promise<V3Result>;

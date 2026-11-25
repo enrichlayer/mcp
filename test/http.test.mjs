@@ -6,6 +6,7 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { SignJWT } from "jose";
 import { httpConfig } from "../build/config.js";
 import { createHttpApp } from "../build/http-app.js";
+import { bigCompany } from "./big-answers.mjs";
 import { headers, startApi } from "./helpers.mjs";
 
 const SECRET = "test-secret-for-the-hosted-connector";
@@ -230,6 +231,25 @@ test("a failed call logs the API status, cost and request id", async (t) => {
   const { ms, ...line } = JSON.parse(lines[0]);
   assert.deepEqual(line, { tool: "validate_email", client: "TestAgent/1.0", status: 404, creditCost: 0, requestId: "req-3" });
   assert.equal(errors.length, 1);
+});
+
+test("a page read with get_more logs one line as get_more, without the cursor", async (t) => {
+  const { lines, url } = await setup(t, (_, n) => ({ body: bigCompany(), headers: headers(1, `req-${n}`) }));
+  const token = await signToken();
+  const profile = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_company_profile", arguments: { url: "https://www.linkedin.com/company/example-corp" } } };
+
+  const agent = { "user-agent": "TestAgent/1.0" };
+
+  const first = lastData(await (await post(url, profile, { token, headers: agent })).text()).result.structuredContent;
+  const cursor = first.more.affiliatedCompanies.cursor;
+  const more = { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "get_more", arguments: { cursor } } };
+  const page = lastData(await (await post(url, more, { token, headers: agent })).text()).result.structuredContent;
+
+  assert.equal(page.path, "affiliatedCompanies");
+  assert.equal(lines.length, 2);
+  const { ms, ...line } = JSON.parse(lines[1]);
+  assert.deepEqual(line, { tool: "get_more", client: "TestAgent/1.0", status: "ok", creditCost: 1, requestId: "req-2" });
+  assert.equal(lines[1].includes(cursor), false);
 });
 
 test("a key the API rejects or limits tells a hosted user to sign in again, not to change the environment", async (t) => {
