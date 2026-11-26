@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { PAGE_BYTES } from "../build/config.js";
 import { compact } from "../build/fit/compact.js";
 import { encodeCursor, fingerprint, readCursor } from "../build/fit/cursor.js";
-import { CHANGED_NOTE, MORE_NOTE, firstPage, nextPage } from "../build/fit/pages.js";
+import { CHANGED_NOTE, ITEM_GONE_NOTE, MORE_NOTE, firstPage, nextPage } from "../build/fit/pages.js";
 import { bigCompany, bigPerson } from "./big-answers.mjs";
 
 const bytes = (value) => Buffer.byteLength(JSON.stringify(value));
@@ -224,7 +224,106 @@ test("a tampered or broken cursor is refused", () => {
     encodeCursor({ ...good, o: -1 }),
     encodeCursor({ ...good, h: "short" }),
     encodeCursor({ ...good, t: "x" }),
+    encodeCursor({ ...good, a: { profile: "x".repeat(513) } }),
+    encodeCursor({ ...good, i: ["short"] }),
   ]) {
     assert.equal(readCursor(broken), null, broken);
   }
+});
+
+test("a cursor into one item of a list never reads another item after the list shifts", () => {
+  const data = bigPerson({ roles: 3 });
+  data.experience.work[0] = { ...data.experience.work[0], title: "Director", description: `Director work. ${"d".repeat(30000)}` };
+  const fresh = answer(data);
+  const first = firstPage(fresh, { kind: "p", args: { profile: "jane-example" }, budget: PAGE_BYTES });
+  const item = nextPage(fresh, readCursor(first.more["experience.work"].cursor), { budget: PAGE_BYTES });
+  const shifted = structuredClone(data);
+  shifted.experience.work.unshift({ title: "Advisor", company: "Example Advisory", startDate: { year: 2026 }, description: `Advisor work. ${"a".repeat(30000)}` });
+
+  const page = nextPage(answer(shifted), readCursor(item.more["experience.work.0.description"].cursor), { budget: PAGE_BYTES });
+
+  assert.ok(page.changed === true || page.text.startsWith("Director"), `got "${page.text.slice(0, 13)}" with changed: ${page.changed}`);
+});
+
+function directorDescriptionCursor() {
+  const data = bigPerson({ roles: 3 });
+  data.experience.work[0] = { ...data.experience.work[0], title: "Director", description: `Director work. ${"d".repeat(30000)}` };
+  const fresh = answer(data);
+  const first = firstPage(fresh, { kind: "p", args: { profile: "jane-example" }, budget: PAGE_BYTES });
+  const item = nextPage(fresh, readCursor(first.more["experience.work"].cursor), { budget: PAGE_BYTES });
+  return { data, cursor: readCursor(item.more["experience.work.0.description"].cursor) };
+}
+
+test("a cursor into an item that changed reads nothing from it and restarts from its list", () => {
+  const { data, cursor } = directorDescriptionCursor();
+  const changed = structuredClone(data);
+  changed.experience.work[0].description = `Director work, rewritten. ${"e".repeat(30000)}`;
+
+  const page = nextPage(answer(changed), cursor, { budget: PAGE_BYTES });
+
+  assert.equal(page.changed, true);
+  assert.equal(page.text, undefined);
+  assert.equal(page.nextCursor, null);
+  assert.equal(page.note, ITEM_GONE_NOTE);
+  assert.deepEqual(readCursor(page.restartCursor), { v: 1, t: "p", a: { profile: "jane-example" }, p: "experience.work", o: 0 });
+});
+
+test("a cursor into an item that is gone never reads another item", () => {
+  const { data, cursor } = directorDescriptionCursor();
+  const gone = structuredClone(data);
+  gone.experience.work.shift();
+
+  const page = nextPage(answer(gone), cursor, { budget: PAGE_BYTES });
+
+  assert.equal(page.changed, true);
+  assert.equal(page.text, undefined);
+  assert.equal(readCursor(page.restartCursor).p, "experience.work");
+});
+
+test("a text item of a list is found again after the list shifts", () => {
+  const data = bigCompany({ points: 5, affiliates: 2, locations: 2 });
+  data.specialties = ["Short one", `First long specialty ${"s".repeat(30000)}`];
+  const fresh = answer(data);
+  const first = firstPage(fresh, { kind: "c", args: COMPANY_ARGS, budget: PAGE_BYTES });
+  const short = nextPage(fresh, readCursor(first.more.specialties.cursor), { budget: PAGE_BYTES });
+  const long = nextPage(fresh, readCursor(short.nextCursor), { budget: PAGE_BYTES });
+  const shifted = structuredClone(data);
+  shifted.specialties.unshift(`Another long specialty ${"t".repeat(30000)}`);
+
+  const page = nextPage(answer(shifted), readCursor(long.more["specialties.1"].cursor), { budget: PAGE_BYTES });
+
+  assert.equal(page.changed, undefined);
+  assert.equal(page.text.startsWith("First long specialty"), true);
+});
+
+test("two levels down, a cursor still finds its item after the outer list shifts", () => {
+  const data = bigPerson({ roles: 2 });
+  data.experience.work[0] = {
+    title: "Director",
+    projects: [
+      { name: "Alpha", notes: `Alpha notes. ${"a".repeat(30000)}` },
+      { name: "Beta", notes: `Beta notes. ${"b".repeat(30000)}` },
+    ],
+  };
+  const fresh = answer(data);
+  const first = firstPage(fresh, { kind: "p", args: { profile: "jane-example" }, budget: PAGE_BYTES });
+  const work = nextPage(fresh, readCursor(first.more["experience.work"].cursor), { budget: PAGE_BYTES });
+  const projects = nextPage(fresh, readCursor(work.more["experience.work.0.projects"].cursor), { budget: PAGE_BYTES });
+  const shifted = structuredClone(data);
+  shifted.experience.work.unshift({ title: "Advisor", description: `Advisor work. ${"x".repeat(30000)}` });
+
+  const page = nextPage(answer(shifted), readCursor(projects.more["experience.work.0.projects.0.notes"].cursor), { budget: PAGE_BYTES });
+
+  assert.equal(page.changed, undefined);
+  assert.equal(page.text.startsWith("Alpha notes."), true);
+});
+
+test("a cursor with a position that is not in its list reads nothing from another item", () => {
+  const { cursor } = directorDescriptionCursor();
+  const data = bigPerson({ roles: 3 });
+
+  const page = nextPage(answer(data), { ...cursor, p: "experience.work.-1.description" }, { budget: PAGE_BYTES });
+
+  assert.equal(page.changed, true);
+  assert.equal(page.text, undefined);
 });

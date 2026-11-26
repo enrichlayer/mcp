@@ -4,9 +4,9 @@ import type { CallV3, V3Params } from "../client.js";
 import { CACHE_ONLY_MAX_AGE_SECONDS, PAGE_BYTES, SSE_KEEP_ALIVE_MS } from "../config.js";
 import { describeFailure, type MessageOptions } from "../errors.js";
 import { KIND_PATHS, kindOf, readCursor } from "../fit/cursor.js";
-import { firstPage, nextPage } from "../fit/pages.js";
+import { firstPage, isWithin, nextPage } from "../fit/pages.js";
 import { v3Params } from "../generated/v3-params.js";
-import { INVALID_CURSOR, listGone, moreToolDef, toolDefs, type ToolDef } from "./definitions.js";
+import { answerTooLarge, INVALID_CURSOR, listGone, moreToolDef, pageTooLarge, tooLongInput, toolDefs, type ToolDef } from "./definitions.js";
 
 const moreEntry = z.object({
   items: z.number().int().optional(),
@@ -91,7 +91,7 @@ export function registerTools(server: McpServer, callV3: CallV3, options: ToolOp
         annotations: { title: def.title, ...ANNOTATIONS },
       },
       async (params, ctx) => {
-        const problem = def.checkParams?.(params);
+        const problem = tooLongInput(params) ?? def.checkParams?.(params);
         if (problem) return failure(problem);
         return answer(ctx, async () => {
           const result = await callV3({
@@ -100,7 +100,8 @@ export function registerTools(server: McpServer, callV3: CallV3, options: ToolOp
             signal: ctx.mcpReq.signal,
             clientName: server.server.getClientVersion()?.name,
           });
-          return success(firstPage(result, { kind: kindOf(def.path), args: params, budget: PAGE_BYTES }));
+          const page = firstPage(result, { kind: kindOf(def.path), args: params, budget: PAGE_BYTES });
+          return isWithin(page, PAGE_BYTES) ? success(page) : failure(answerTooLarge(def.name, result.creditCost));
         });
       },
     );
@@ -129,7 +130,7 @@ export function registerTools(server: McpServer, callV3: CallV3, options: ToolOp
         });
         const page = nextPage(result, cursor, { budget: PAGE_BYTES });
         if (!page) return failure(listGone(cursor.t, result.creditCost));
-        return success(page);
+        return isWithin(page, PAGE_BYTES) ? success(page) : failure(pageTooLarge(cursor.t, result.creditCost));
       });
     },
   );

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { MAX_INPUT_CHARS } from "../config.js";
 import { v3Params, type V3Path } from "../generated/v3-params.js";
 
 export const KIND_PATHS = {
@@ -21,6 +22,7 @@ export interface Cursor {
   p: string;
   o: number;
   h?: string;
+  i?: string[];
 }
 
 const PERSON_IDENTIFIERS = ["profile", "email", "twitter", "facebook", "github"];
@@ -31,15 +33,22 @@ const SECTIONS: Partial<Record<Kind, [string, string][]>> = {
     ["contactInformation.phoneNumbers", "phoneNumber"],
     ["contactInformation.emails.personal", "personalEmail"],
     ["contactInformation.emails.work", "workEmail"],
+    ["contactInformation.socialLinks", "socialLink"],
+    ["slug.github", "socialLink"],
+    ["slug.facebook", "socialLink"],
+    ["slug.twitter", "socialLink"],
     ["careerInsight", "careerInsight"],
     ["developerProfile", "developerProfile"],
   ],
   c: [
+    ["funding.summary.crunchbaseUrl", "extra"],
     ["funding", "fundingData"],
     ["exits", "exitData"],
     ["acquisitions", "acquisitions"],
     ["contactInformation.emails", "extra"],
     ["contactInformation.phoneNumbers", "extra"],
+    ["contactInformation.socialLinks.crunchbaseUrl", "extra"],
+    ["slug.crunchbase", "extra"],
     ["stock", "extra"],
     ["activities", "activities"],
   ],
@@ -59,6 +68,11 @@ function isGiven(value: unknown): value is string | number {
   return typeof value === "number" || (typeof value === "string" && value.trim() !== "");
 }
 
+function companyUrl(url: string): string {
+  const slug = /\/(?:company|showcase)\/([^?/#]+)/.exec(url)?.[1];
+  return slug ? `https://www.linkedin.com/company/${slug}` : url.replace(/[?#].*$/, "");
+}
+
 export function repeatArgs(kind: Kind, firstArgs: Record<string, unknown>, data: unknown, path: string): CursorArgs {
   const pick = (names: string[]) => Object.fromEntries(names.filter((name) => isGiven(firstArgs[name])).map((name) => [name, firstArgs[name] as string | number]));
   if (kind === "p") {
@@ -69,7 +83,7 @@ export function repeatArgs(kind: Kind, firstArgs: Record<string, unknown>, data:
   }
   if (kind === "c") {
     const section = sectionOf(kind, path);
-    return { ...pick(["url"]), ...(section && { [section]: "include" }) };
+    return { url: companyUrl(String(firstArgs.url)), ...(section && { [section]: "include" }) };
   }
   return pick(Object.keys(v3Params[KIND_PATHS[kind]]));
 }
@@ -86,11 +100,13 @@ const cursorSchema = z
     p: z.string().max(500),
     o: z.number().int().min(0),
     h: z.string().regex(/^[A-Za-z0-9_-]{8}$/).optional(),
+    i: z.array(z.string().regex(/^[A-Za-z0-9_-]{8}$/)).min(1).max(16).optional(),
   })
   .strict();
 
 function hasValidArgs({ t, a }: Cursor): boolean {
   if ("maxAgeSeconds" in a) return false;
+  if (Object.values(a).some((value) => typeof value === "string" && value.length > MAX_INPUT_CHARS)) return false;
   if (!z.object(v3Params[KIND_PATHS[t]]).strict().safeParse(a).success) return false;
   const identifiers = IDENTIFIERS[t].filter((name) => isGiven(a[name]));
   const sections = Object.keys(a).filter((name) => !IDENTIFIERS[t].includes(name));

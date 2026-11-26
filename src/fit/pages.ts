@@ -42,6 +42,9 @@ export const MORE_NOTE =
 export const CHANGED_NOTE =
   "This list changed since the earlier pages were read, so items may repeat or be missing. This page comes from the updated list; to read it consistently, start again from `restartCursor` (every page is charged).";
 
+export const ITEM_GONE_NOTE =
+  "The item this cursor reads from changed or is no longer in its list, so this page is empty. To read that list again, start from `restartCursor` (every page is charged).";
+
 type Part = { path: string; value: unknown[] | string };
 type Money = Pick<V3Result, "creditCost" | "requestId">;
 type Extra = Pick<Page, "changed" | "restartCursor" | "note">;
@@ -58,14 +61,28 @@ const isObject = (value: unknown): value is Record<string, unknown> => value !==
 const shown = (path: string) => (path === "" ? ROOT_KEY : path);
 const join = (prefix: string, key: string) => (prefix ? `${prefix}.${key}` : key);
 
-function valueAt(root: unknown, path: string): unknown {
-  if (path === "") return root;
+type Located = { value: unknown } | { gone: string; bindings: string[] };
+
+function locate(root: unknown, path: string, bindings: string[] = []): Located {
+  if (path === "") return { value: root };
+  const keys = path.split(".");
   let node = root;
-  for (const key of path.split(".")) {
-    if (node === null || typeof node !== "object" || !Object.hasOwn(node, key)) return undefined;
+  let bound = 0;
+  for (const [depth, key] of keys.entries()) {
+    if (Array.isArray(node) && bound < bindings.length) {
+      const wanted = bindings[bound];
+      const given = Number(key);
+      const isInList = Number.isInteger(given) && given >= 0 && given < node.length;
+      const index = isInList && fingerprint(node[given]) === wanted ? given : node.findIndex((item) => fingerprint(item) === wanted);
+      if (index < 0) return { gone: keys.slice(0, depth).join("."), bindings: bindings.slice(0, bound) };
+      bound += 1;
+      node = node[index];
+      continue;
+    }
+    if (node === null || typeof node !== "object" || !Object.hasOwn(node, key)) return { value: undefined };
     node = (node as Record<string, unknown>)[key];
   }
-  return node;
+  return { value: node };
 }
 
 function partsOf(node: Record<string, unknown>, path = "", out: Part[] = []): Part[] {
@@ -93,13 +110,14 @@ function without(node: Record<string, unknown>, left: Set<string>, path = ""): R
 
 function fitObject(node: Record<string, unknown>, prefix: string, budget: number, wrap: Wrap, entryFor: EntryFor) {
   const parts = partsOf(node);
-  const lists = parts.filter((part) => Array.isArray(part.value));
-  const texts = parts.filter((part) => typeof part.value === "string").sort((a, b) => size(b.value) - size(a.value));
   const entries = new Map<string, MoreEntry>();
   const entryOf = (part: Part) => {
     if (!entries.has(part.path)) entries.set(part.path, entryFor(join(prefix, part.path), part.value));
     return entries.get(part.path)!;
   };
+  const isWorthMoving = (part: Part) => size(part.value) > size(entryOf(part)) + size(join(prefix, part.path));
+  const lists = parts.filter((part) => Array.isArray(part.value) && isWorthMoving(part));
+  const texts = parts.filter((part) => typeof part.value === "string").sort((a, b) => size(b.value) - size(a.value));
   const left = new Set(lists.map((part) => part.path));
   const render = () => ({
     node: without(node, left),
@@ -110,7 +128,7 @@ function fitObject(node: Record<string, unknown>, prefix: string, budget: number
     return size(wrap(rest, more)) <= budget;
   };
   for (const text of texts) {
-    if (fits()) break;
+    if (fits() || !isWorthMoving(text)) break;
     left.add(text.path);
   }
   for (const list of [...lists].sort((a, b) => size(a.value) - size(b.value))) {
@@ -178,9 +196,9 @@ function countPages(value: unknown[] | string, cursor: Cursor, budget: number): 
   }
 }
 
-function entryMaker(kind: Kind, argsFor: (path: string) => Cursor["a"], budget: number): EntryFor {
+function entryMaker(kind: Kind, argsFor: (path: string) => Cursor["a"], budget: number, bindings?: string[]): EntryFor {
   return (path, value) => {
-    const cursor: Cursor = { v: 1, t: kind, a: argsFor(path), p: path, o: 0 };
+    const cursor: Cursor = { v: 1, t: kind, a: argsFor(path), p: path, o: 0, ...(bindings && { i: bindings }) };
     return {
       ...(typeof value === "string" ? { chars: value.length } : { items: value.length }),
       approxChars: size(value),
@@ -201,12 +219,24 @@ export function firstPage(result: V3Result, { kind, args, budget }: { kind: Kind
   return wrap(node, more);
 }
 
+export function isWithin(value: unknown, budget: number): boolean {
+  return size(value) <= budget;
+}
+
+function gonePage(cursor: Cursor, gone: { gone: string; bindings: string[] }, money: Money): Page {
+  const restart: Cursor = { v: 1, t: cursor.t, a: cursor.a, p: gone.gone, o: 0, ...(gone.bindings.length > 0 && { i: gone.bindings }) };
+  return { path: shown(cursor.p), from: cursor.o, nextCursor: null, ...money, changed: true, restartCursor: encodeCursor(restart), note: ITEM_GONE_NOTE };
+}
+
 export function nextPage(fresh: V3Result, cursor: Cursor, { budget }: { budget: number }): Page | null {
-  const value = valueAt(compact(fresh.data), cursor.p);
-  if (!Array.isArray(value) && typeof value !== "string") return null;
   const money = { creditCost: fresh.creditCost, requestId: fresh.requestId };
+  const found = locate(compact(fresh.data), cursor.p, cursor.i);
+  if ("gone" in found) return gonePage(cursor, found, money);
+  const value = found.value;
+  if (!Array.isArray(value) && typeof value !== "string") return null;
+  const restart = encodeCursor({ v: 1, t: cursor.t, a: cursor.a, p: cursor.p, o: 0, ...(cursor.i && { i: cursor.i }) });
   const isChanged = cursor.o > 0 && cursor.h !== fingerprint(value.slice(0, cursor.o));
-  const extra: Extra = isChanged ? { changed: true, restartCursor: encodeCursor({ v: 1, t: cursor.t, a: cursor.a, p: cursor.p, o: 0 }), note: CHANGED_NOTE } : {};
+  const extra: Extra = isChanged ? { changed: true, restartCursor: restart, note: CHANGED_NOTE } : {};
   const from = Math.min(cursor.o, value.length);
   const at = { ...cursor, o: from };
   const nextCursor = (end: number) => (end < value.length ? encodeCursor({ ...cursor, o: end, h: fingerprint(value.slice(0, end)) }) : null);
@@ -216,7 +246,7 @@ export function nextPage(fresh: V3Result, cursor: Cursor, { budget }: { budget: 
 
   const item = value[from];
   const itemPath = join(cursor.p, String(from));
-  const entryFor = entryMaker(cursor.t, () => cursor.a, budget);
+  const entryFor = entryMaker(cursor.t, () => cursor.a, budget, [...(cursor.i ?? []), fingerprint(item)]);
   const next = nextCursor(from + 1);
   if (isObject(item)) {
     const longestNext = encodeCursor({ ...cursor, o: value.length, h: MAX_FINGERPRINT });

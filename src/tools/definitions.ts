@@ -1,4 +1,4 @@
-import { PAGE_BYTES } from "../config.js";
+import { MAX_INPUT_CHARS, PAGE_BYTES } from "../config.js";
 import { CUT_OFF_ADVICE } from "../errors.js";
 import { KIND_PATHS, type Kind } from "../fit/cursor.js";
 import type { V3Path } from "../generated/v3-params.js";
@@ -135,9 +135,44 @@ export const moreToolDef = {
 export const INVALID_CURSOR =
   "This is not a cursor this server gave out. Pass a `cursor`, `nextCursor` or `restartCursor` exactly as an Enrich Layer answer returned it.";
 
+const LONG_INPUT_ADVICE: Record<string, string> = {
+  url: "pass the page URL without tracking parameters",
+  profile: "pass the profile URL without tracking parameters, or the username",
+  twitter: "pass the username, or the profile URL without tracking parameters",
+  facebook: "pass the username, or the profile URL without tracking parameters",
+  github: "pass the username, or the profile URL without tracking parameters",
+  email: "pass a single email address",
+  q: "pass a shorter name or domain",
+  full_name: "pass the name only",
+  first_name: "pass the name only",
+  last_name: "pass the name only",
+  domain: "pass the domain only, such as example.com",
+};
+
+export function tooLongInput(params: Record<string, unknown>): string | null {
+  const name = Object.keys(LONG_INPUT_ADVICE).find((key) => {
+    const value = params[key];
+    return typeof value === "string" && value.length > MAX_INPUT_CHARS;
+  });
+  return name ? `\`${name}\` is longer than ${MAX_INPUT_CHARS} characters; ${LONG_INPUT_ADVICE[name]}.` : null;
+}
+
+function charged(creditCost: number | null): string {
+  return creditCost === null ? "The charge for this call is unknown." : `This call was charged ${creditCost} credit${creditCost === 1 ? "" : "s"}.`;
+}
+
+function toolOf(kind: Kind): string {
+  return toolDefs.find((def) => def.path === KIND_PATHS[kind])!.name;
+}
+
 export function listGone(kind: Kind, creditCost: number | null): string {
-  const tool = toolDefs.find((def) => def.path === KIND_PATHS[kind])!.name;
-  const charge =
-    creditCost === null ? "The charge for this call is unknown." : `This call was charged ${creditCost} credit${creditCost === 1 ? "" : "s"}.`;
-  return `This list is not in the answer any more: the profile changed since the first page. Call ${tool} again for a fresh answer and new cursors. ${charge}`;
+  return `This list is not in the answer any more: the profile changed since the first page. Call ${toolOf(kind)} again for a fresh answer and new cursors. ${charged(creditCost)}`;
+}
+
+export function answerTooLarge(tool: string, creditCost: number | null): string {
+  return `This answer does not fit in ${LIMIT} bytes even with its long lists left out. Call ${tool} again with fewer optional sections, or pass the page URL without tracking parameters. ${charged(creditCost)}`;
+}
+
+export function pageTooLarge(kind: Kind, creditCost: number | null): string {
+  return `This page does not fit in ${LIMIT} bytes. Call ${toolOf(kind)} again with fewer optional sections for new cursors. ${charged(creditCost)}`;
 }
