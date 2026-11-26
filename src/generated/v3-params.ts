@@ -4,7 +4,7 @@ import { z } from "zod";
 export const v3Params = {
   "/v3/person": {
     "email": z.string().optional().describe("Email address."),
-    "profile": z.string().optional().describe("LinkedIn username or profile URL."),
+    "profile": z.string().optional().describe("Profile username (the part after /in/) or profile URL."),
     "facebook": z.string().optional().describe("Facebook username or profile URL."),
     "twitter": z.string().optional().describe("Twitter/X username or profile URL."),
     "github": z.string().optional().describe("GitHub username or profile URL."),
@@ -18,7 +18,7 @@ export const v3Params = {
     "maxAgeSeconds": z.number().int().min(0).optional().describe("Maximum acceptable age of cached data, in seconds. Default: 2592000."),
   },
   "/v3/company": {
-    "url": z.string().describe("LinkedIn company or showcase page URL to look up."),
+    "url": z.string().describe("Company or showcase page URL to look up."),
     "fundingData": z.enum(["exclude","include"]).optional().describe("Include the funding rounds, returned in the `funding.rounds` section, and the date and type of the last round in the `funding.summary` section. Default: exclude."),
     "exitData": z.enum(["exclude","include"]).optional().describe("Include the exit events, returned in the `exits` section. Default: exclude."),
     "acquisitions": z.enum(["exclude","include"]).optional().describe("Include the companies acquired and the acquirer, returned in the `acquisitions` section. Default: exclude."),
