@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CACHE_ONLY_MAX_AGE_SECONDS, MAX_INPUT_CHARS, PAGE_BYTES } from "../build/config.js";
 import { compact } from "../build/fit/compact.js";
-import { encodeCursor, readCursor } from "../build/fit/cursor.js";
+import { encodeCursor, readCursor, SECTIONS } from "../build/fit/cursor.js";
+import { v3Params } from "../build/generated/v3-params.js";
 import { INVALID_CURSOR } from "../build/tools/definitions.js";
 import { bigCompany, bigPerson } from "./big-answers.mjs";
 import { connectMcp, headers, startApi, testClient } from "./helpers.mjs";
@@ -257,14 +258,16 @@ test("with values at the limit, every answer and every page fits and every page 
 });
 
 test("a long text read with a cursor at the limit moves on with every page", async (t) => {
-  const data = bigCompany({ points: 5, affiliates: 2, locations: 2 });
+  const data = { ...bigCompany({ points: 5, affiliates: 2, locations: 2 }), slug: { linkedin: null }, contactInformation: { socialLinks: { linkedinUrl: null } } };
   data.description = "An example company text. ".repeat(4000);
   const { client } = await setup(t, (_, n) => ({ body: data, headers: headers(1, `req-${n}`) }));
+  const url = `https://www.linkedin.com/company/${"a".repeat(MAX_INPUT_CHARS - 33)}`;
 
-  const first = await client.callTool({ name: "get_company_profile", arguments: { url: `https://www.linkedin.com/company/${"a".repeat(MAX_INPUT_CHARS - 33)}` } });
+  const first = await client.callTool({ name: "get_company_profile", arguments: { url } });
   const pages = await readEverything(client, first.structuredContent);
 
   const descriptionPages = pages.filter((page) => page.path === "description");
+  assert.equal(readCursor(first.structuredContent.more.description.cursor).a.url, url);
   assert.ok(descriptionPages.length > 3);
   assert.equal(descriptionPages.map((page) => page.text).join(""), data.description);
 });
@@ -299,7 +302,7 @@ test("an answer that cannot fit even with its long lists left out, asked for wit
   );
 });
 
-test("an answer that cannot fit with the sections it asked for names those sections", async (t) => {
+test("an answer that cannot fit is not blamed on the sections it asked for when none of their fields is left in it", async (t) => {
   const { client } = await setup(t, () => ({ body: tooBigCompany(), headers: headers(3, "req-big") }));
 
   const result = await client.callTool({ name: "get_company_profile", arguments: { url: COMPANY_URL, extra: "include", exitData: "exclude", fundingData: "include" } });
@@ -307,23 +310,42 @@ test("an answer that cannot fit with the sections it asked for names those secti
   assert.equal(result.isError, true);
   assert.equal(
     result.content[0].text,
-    "This answer does not fit in 24,000 bytes even with its long lists left out. Call get_company_profile again without some of the optional sections you asked for: fundingData, extra. This call was charged 3 credits. To have the charge checked, contact support@enrichlayer.com with request id req-big.",
+    "This answer does not fit in 24,000 bytes even with its long lists left out, so it cannot be returned through MCP. This call was charged 3 credits. To have the charge checked, contact support@enrichlayer.com with request id req-big.",
   );
 });
 
-test("a page that cannot fit says it cannot come through MCP and gives the request id", async (t) => {
+test("an answer that cannot fit names only the sections asked for whose fields are still in it", async (t) => {
+  const data = bigCompany();
+  data.stock = Object.fromEntries(Array.from({ length: 250 }, (_, i) => [`listing${i}`, `${i} ${"s".repeat(90)}`]));
+  data.funding.summary = { roundsCount: 12, totalFundingAmountUsd: 5000000 };
+  const { client } = await setup(t, () => ({ body: data, headers: headers(3, "req-big") }));
+
+  const result = await client.callTool({ name: "get_company_profile", arguments: { url: COMPANY_URL, extra: "include", fundingData: "include" } });
+
+  assert.equal(result.isError, true);
+  assert.equal(
+    result.content[0].text,
+    "This answer does not fit in 24,000 bytes even with its long lists left out. Call get_company_profile again without some of the optional sections you asked for: extra. This call was charged 3 credits. To have the charge checked, contact support@enrichlayer.com with request id req-big.",
+  );
+});
+
+test("a page that cannot fit says it cannot come through MCP, gives the request id and a cursor past its item", async (t) => {
   const data = bigPerson({ roles: 2 });
   data.experience.work[0] = Object.fromEntries(Array.from({ length: 150 }, (_, i) => [`field${i}`, `${i} ${"q".repeat(300)}`]));
   const { client } = await setup(t, (_, n) => ({ body: data, headers: headers(n === 1 ? 1 : 2, `req-${n}`) }));
 
   const first = await client.callTool({ name: "get_person_profile", arguments: { profile: "jane-example" } });
   const page = await client.callTool({ name: "get_more", arguments: { cursor: first.structuredContent.more["experience.work"].cursor } });
+  const skip = /call get_more with the cursor ([A-Za-z0-9_-]+)\./.exec(page.content[0].text)[1];
+  const rest = await client.callTool({ name: "get_more", arguments: { cursor: skip } });
 
   assert.equal(page.isError, true);
   assert.equal(
     page.content[0].text,
-    "This page does not fit in 24,000 bytes, so it cannot be read through MCP, and calling get_person_profile again leads to the same page. This call was charged 2 credits. To have the charge checked, contact support@enrichlayer.com with request id req-2.",
+    `This page does not fit in 24,000 bytes, so it cannot be read through MCP, and calling get_person_profile again leads to the same page. To skip this item and read the rest of the list, call get_more with the cursor ${skip}. This call was charged 2 credits. To have the charge checked, contact support@enrichlayer.com with request id req-2.`,
   );
+  assert.deepEqual(rest.structuredContent.list, compact(data).experience.work.slice(1));
+  assert.equal(rest.structuredContent.nextCursor, null);
 });
 
 function withValueAt(data, path, value) {
@@ -366,21 +388,19 @@ function honoring(kind, data, query) {
   return body;
 }
 
-test("the section map covers every optional section of a person and a company", () => {
-  assert.deepEqual([...new Set(SECTION_FIELDS.map(([kind, param]) => `${kind}:${param}`))], [
-    "p:socialLink",
-    "p:phoneNumber",
-    "p:personalEmail",
-    "p:workEmail",
-    "p:careerInsight",
-    "p:developerProfile",
-    "p:activities",
-    "c:fundingData",
-    "c:exitData",
-    "c:acquisitions",
-    "c:extra",
-    "c:activities",
-  ]);
+const sectionParams = (path) =>
+  Object.entries(v3Params[path])
+    .filter(([, schema]) => schema.safeParse("include").success && !schema.safeParse("not-a-section").success)
+    .map(([name]) => name)
+    .sort();
+
+test("the section map in the source and the section tests cover every optional section of a person and a company", () => {
+  for (const [kind, path] of [["p", "/v3/person"], ["c", "/v3/company"]]) {
+    const expected = sectionParams(path);
+
+    assert.deepEqual([...new Set(SECTIONS[kind].map(([, section]) => section))].sort(), expected, `${kind}: source`);
+    assert.deepEqual([...new Set(SECTION_FIELDS.filter(([rowKind]) => rowKind === kind).map(([, param]) => param))].sort(), expected, `${kind}: tests`);
+  }
 });
 
 for (const [kind, param, path, value] of SECTION_FIELDS) {
@@ -411,11 +431,15 @@ test("a page read with socialLink shows what the repeat call was charged", async
   assert.equal(page.structuredContent.requestId, "req-2");
 });
 
-const companySlugOf = (url) => decodeURIComponent(/\/(?:company|showcase)\/([^?/]+)/.exec(url.replace(/([^:]\/)\/+/g, "$1"))[1]);
+const companyPageOf = (url) => {
+  const [, kind, slug] = /\/(company|showcase)\/([^?/]+)/.exec(url.replace(/([^:]\/)\/+/g, "$1"));
+  return { kind, slug: decodeURIComponent(slug) };
+};
+const companySlugOf = (url) => companyPageOf(url).slug;
 const personSlugOf = (profile) => decodeURIComponent(/\/in\/([^?/]+)/.exec(profile.replace(/([^:]\/)\/+/g, "$1"))?.[1] ?? profile);
 
 test("a page of a company comes from the company the first call returned, whatever else its URL names", async (t) => {
-  const company = (slug, text) => ({ ...bigCompany({ points: 5, affiliates: 2, locations: 2 }), slug: { linkedin: slug }, description: `${text} ${"d".repeat(30000)}` });
+  const company = (slug, text) => ({ ...bigCompany({ points: 5, affiliates: 2, locations: 2 }), slug: { linkedin: slug }, contactInformation: { socialLinks: { linkedinUrl: null } }, description: `${text} ${"d".repeat(30000)}` });
   const companies = { acme: company("acme", "Acme builds examples."), other: company("other", "Other builds examples.") };
   const { api, client } = await setup(t, (request, n) => ({ body: companies[companySlugOf(request.query.url)], headers: headers(1, `req-${n}`) }));
 
@@ -427,16 +451,38 @@ test("a page of a company comes from the company the first call returned, whatev
   assert.deepEqual(api.requests.map((request) => companySlugOf(request.query.url)), api.requests.map(() => "acme"));
 });
 
+test("a company is repeated by the URL the API gives for it, when that differs from the URL rebuilt from its slug", async (t) => {
+  const page = (text, linkedinUrl) => ({ ...bigCompany({ points: 5, affiliates: 2, locations: 2 }), slug: { linkedin: "acme-cloud" }, contactInformation: { socialLinks: { linkedinUrl } }, description: `${text} ${"d".repeat(30000)}` });
+  const pages = {
+    "showcase/acme-cloud": page("The Acme Cloud showcase.", "https://www.linkedin.com/showcase/acme-cloud"),
+    "company/acme-cloud": page("Another Acme Cloud company.", "https://www.linkedin.com/company/acme-cloud"),
+  };
+  const pageKey = (url) => Object.values(companyPageOf(url)).join("/");
+  const { api, client } = await setup(t, (request, n) => ({ body: pages[pageKey(request.query.url)], headers: headers(1, `req-${n}`) }));
+
+  const first = await client.callTool({ name: "get_company_profile", arguments: { url: "https://www.linkedin.com/showcase/acme-cloud" } });
+  const read = await readEverything(client, first.structuredContent);
+
+  assert.equal(read.map((one) => one.text).join(""), pages["showcase/acme-cloud"].description);
+  assert.deepEqual(api.requests.map((request) => pageKey(request.query.url)), api.requests.map(() => "showcase/acme-cloud"));
+});
+
 test("every cursor given out for an identifier at the limit or written oddly is accepted by get_more and reads the same profile", async (t) => {
   const longSlug = "j".repeat(MAX_INPUT_CHARS + 88);
+  const companyOf = (url) => {
+    const { kind, slug } = companyPageOf(url);
+    return { kind, slug: slug.toLowerCase() };
+  };
   const { api, client } = await setup(t, (request, n) => {
-    const body =
-      request.path === "/v3/company"
-        ? { ...bigCompany(), slug: { linkedin: companySlugOf(request.query.url).toLowerCase() } }
-        : { ...bigPerson(), slug: { linkedin: request.query.email ? longSlug : personSlugOf(request.query.profile).toLowerCase() } };
-    return { body, headers: headers(1, `req-${n}`) };
+    if (request.path === "/v3/company") {
+      const { kind, slug } = companyOf(request.query.url);
+      const linkedinUrl = `https://www.linkedin.com/${kind}/${encodeURIComponent(slug)}`;
+      return { body: { ...bigCompany(), slug: { linkedin: slug }, contactInformation: { socialLinks: { linkedinUrl } } }, headers: headers(1, `req-${n}`) };
+    }
+    return { body: { ...bigPerson(), slug: { linkedin: request.query.email ? longSlug : personSlugOf(request.query.profile).toLowerCase() } }, headers: headers(1, `req-${n}`) };
   });
-  const identityOf = (request) => (request.query.url ? companySlugOf(request.query.url).toLowerCase() : (request.query.email ?? personSlugOf(request.query.profile).toLowerCase()));
+  const identityOf = (request) =>
+    request.query.url ? Object.values(companyOf(request.query.url)).join("/") : (request.query.email ?? personSlugOf(request.query.profile).toLowerCase());
   const calls = [
     ["get_company_profile", { url: `https://www.linkedin.com/company/${"a".repeat(MAX_INPUT_CHARS - 33)}` }],
     ["get_company_profile", { url: `https://linkedin.com/company/${"a".repeat(MAX_INPUT_CHARS - 29)}` }],

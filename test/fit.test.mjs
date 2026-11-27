@@ -464,3 +464,79 @@ test("a slug that cannot be written into a URL is not used for the repeat", () =
   const urls = Object.values(page.more).map((entry) => readCursor(entry.cursor).a.url);
   assert.deepEqual(urls, urls.map(() => COMPANY_ARGS.url));
 });
+
+test("a cursor into an item of a list that became null restarts from that list, and the restart gives an empty last page", () => {
+  const { data, cursor } = onlyRoleDescriptionCursor();
+  const nulled = structuredClone(data);
+  nulled.experience.work = null;
+
+  const page = nextPage(answer(nulled), cursor, { budget: PAGE_BYTES });
+  const restart = nextPage(answer(nulled), readCursor(page.restartCursor), { budget: PAGE_BYTES });
+
+  assert.equal(page.changed, true);
+  assert.deepEqual(readCursor(page.restartCursor), { v: 1, t: "p", a: { profile: "jane-example" }, p: "experience.work", o: 0 });
+  assert.deepEqual(restart, { path: "experience.work", from: 0, nextCursor: null, creditCost: 1, requestId: "0123456789abcdef0123456789abcdef" });
+});
+
+function notesCursor() {
+  const data = bigPerson({ roles: 1 });
+  data.experience.work[0] = { title: "Director", projects: [{ name: "Alpha", notes: `Alpha notes. ${"a".repeat(30000)}` }] };
+  const fresh = answer(data);
+  const first = firstPage(fresh, { kind: "p", args: { profile: "jane-example" }, budget: PAGE_BYTES });
+  const work = nextPage(fresh, readCursor(first.more["experience.work"].cursor), { budget: PAGE_BYTES });
+  const projects = nextPage(fresh, readCursor(work.more["experience.work.0.projects"].cursor), { budget: PAGE_BYTES });
+  return { data, cursor: readCursor(projects.more["experience.work.0.projects.0.notes"].cursor) };
+}
+
+test("two levels down, a cursor whose outer list became null restarts from that list", () => {
+  const { data, cursor } = notesCursor();
+  const nulled = structuredClone(data);
+  nulled.experience.work = null;
+
+  const page = nextPage(answer(nulled), cursor, { budget: PAGE_BYTES });
+  const restart = nextPage(answer(nulled), readCursor(page.restartCursor), { budget: PAGE_BYTES });
+
+  assert.equal(page.changed, true);
+  assert.deepEqual(readCursor(page.restartCursor), { v: 1, t: "p", a: { profile: "jane-example" }, p: "experience.work", o: 0 });
+  assert.equal(restart.nextCursor, null);
+});
+
+test("two levels down, a cursor whose inner list became null restarts from the outer list, which still reads", () => {
+  const { data, cursor } = notesCursor();
+  const nulled = structuredClone(data);
+  nulled.experience.work[0].projects = null;
+
+  const page = nextPage(answer(nulled), cursor, { budget: PAGE_BYTES });
+  const restart = nextPage(answer(nulled), readCursor(page.restartCursor), { budget: PAGE_BYTES });
+
+  assert.equal(page.changed, true);
+  assert.deepEqual(readCursor(page.restartCursor), { v: 1, t: "p", a: { profile: "jane-example" }, p: "experience.work", o: 0 });
+  assert.deepEqual(restart.list, [{ title: "Director" }]);
+});
+
+test("a list read from the middle that became null gives an empty last page marked as changed", () => {
+  const data = bigCompany();
+  const first = firstPage(answer(data), { kind: "c", args: COMPANY_ARGS, budget: PAGE_BYTES });
+  const page = nextPage(answer(data), readCursor(first.more["companySize.employeeCountOverTime"].cursor), { budget: PAGE_BYTES });
+  const nulled = bigCompany();
+  nulled.companySize.employeeCountOverTime = null;
+
+  const last = nextPage(answer(nulled), readCursor(page.nextCursor), { budget: PAGE_BYTES });
+
+  assert.equal(last.nextCursor, null);
+  assert.equal(last.changed, true);
+  assert.equal(last.note, CHANGED_NOTE);
+  assert.deepEqual(readCursor(last.restartCursor), { v: 1, t: "c", a: { url: COMPANY_ARGS.url }, p: "companySize.employeeCountOverTime", o: 0 });
+});
+
+test("after the list shifts, a page gives the position where its item was found", () => {
+  const { data, cursor } = directorDescriptionCursor();
+  const shifted = structuredClone(data);
+  shifted.experience.work.unshift({ title: "Advisor", description: `Advisor work. ${"a".repeat(30000)}` });
+
+  const page = nextPage(answer(shifted), cursor, { budget: PAGE_BYTES });
+
+  assert.equal(page.path, "experience.work.1.description");
+  assert.equal(readCursor(page.nextCursor).p, "experience.work.1.description");
+  assert.equal(page.text.startsWith("Director work."), true);
+});

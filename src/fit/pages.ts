@@ -61,28 +61,30 @@ const isObject = (value: unknown): value is Record<string, unknown> => value !==
 const shown = (path: string) => (path === "" ? ROOT_KEY : path);
 const join = (prefix: string, key: string) => (prefix ? `${prefix}.${key}` : key);
 
-type Located = { value: unknown } | { gone: string; bindings: string[] };
+type Located = { value: unknown; path: string } | { gone: string; bindings: string[]; path: string };
 
 function locate(root: unknown, path: string, bindings: string[] = []): Located {
-  if (path === "") return { value: root };
+  if (path === "") return { value: root, path };
   const keys = path.split(".");
   let node = root;
   let bound = 0;
   for (const [depth, key] of keys.entries()) {
-    if (Array.isArray(node) && bound < bindings.length) {
+    if (bound < bindings.length && (Array.isArray(node) || (node === null && /^\d+$/.test(key)))) {
+      const list = Array.isArray(node) ? node : [];
       const isWanted = (item: unknown) => fingerprint(compact(item)) === bindings[bound];
       const given = Number(key);
-      const isInList = Number.isInteger(given) && given >= 0 && given < node.length;
-      const index = isInList && isWanted(node[given]) ? given : node.findIndex(isWanted);
-      if (index < 0) return { gone: keys.slice(0, depth).join("."), bindings: bindings.slice(0, bound) };
+      const isInList = Number.isInteger(given) && given >= 0 && given < list.length;
+      const index = isInList && isWanted(list[given]) ? given : list.findIndex(isWanted);
+      if (index < 0) return { gone: keys.slice(0, depth).join("."), bindings: bindings.slice(0, bound), path: keys.join(".") };
+      keys[depth] = String(index);
       bound += 1;
-      node = node[index];
+      node = list[index];
       continue;
     }
-    if (node === null || typeof node !== "object" || !Object.hasOwn(node, key)) return { value: undefined };
+    if (node === null || typeof node !== "object" || !Object.hasOwn(node, key)) return { value: undefined, path: keys.join(".") };
     node = (node as Record<string, unknown>)[key];
   }
-  return { value: node };
+  return { value: node, path: keys.join(".") };
 }
 
 function partsOf(node: Record<string, unknown>, path = "", out: Part[] = []): Part[] {
@@ -244,25 +246,27 @@ function gonePage(cursor: Cursor, gone: { gone: string; bindings: string[] }, mo
 export function nextPage(fresh: V3Result, cursor: Cursor, { budget }: { budget: number }): Page | null {
   const money = { creditCost: fresh.creditCost, requestId: fresh.requestId };
   const found = locate(fresh.data, cursor.p, cursor.i);
-  if ("gone" in found) return gonePage(cursor, found, money);
+  const here: Cursor = { ...cursor, p: found.path };
+  if ("gone" in found) return gonePage(here, found, money);
+  const restart = encodeCursor({ v: 1, t: here.t, a: here.a, p: here.p, o: 0, ...(here.i && { i: here.i }) });
+  const changedSince = (isChanged: boolean): Extra => (isChanged ? { changed: true, restartCursor: restart, note: CHANGED_NOTE } : {});
+  if (found.value === null) return { path: shown(here.p), from: 0, nextCursor: null, ...money, ...changedSince(cursor.o > 0) };
   const value = compact(found.value);
   if (!Array.isArray(value) && typeof value !== "string") return null;
-  const restart = encodeCursor({ v: 1, t: cursor.t, a: cursor.a, p: cursor.p, o: 0, ...(cursor.i && { i: cursor.i }) });
-  const isChanged = cursor.o > 0 && cursor.h !== fingerprint(value.slice(0, cursor.o));
-  const extra: Extra = isChanged ? { changed: true, restartCursor: restart, note: CHANGED_NOTE } : {};
+  const extra = changedSince(cursor.o > 0 && cursor.h !== fingerprint(value.slice(0, cursor.o)));
   const from = Math.min(cursor.o, value.length);
-  const at = { ...cursor, o: from };
-  const nextCursor = (end: number) => (end < value.length ? encodeCursor({ ...cursor, o: end, h: fingerprint(value.slice(0, end)) }) : null);
+  const at = { ...here, o: from };
+  const nextCursor = (end: number) => (end < value.length ? encodeCursor({ ...here, o: end, h: fingerprint(value.slice(0, end)) }) : null);
   const end = endOf(value, at, from, budget, money, extra);
   if (typeof value === "string") return frame(at, value, from, { text: value.slice(from, end) }, nextCursor(end), money, extra);
   if (end > from || from >= value.length) return frame(at, value, from, { list: value.slice(from, end) }, nextCursor(end), money, extra);
 
   const item = value[from];
-  const itemPath = join(cursor.p, String(from));
+  const itemPath = join(here.p, String(from));
   const entryFor = entryMaker(cursor.t, () => cursor.a, budget, [...(cursor.i ?? []), fingerprint(item)]);
   const next = nextCursor(from + 1);
   if (isObject(item)) {
-    const longestNext = encodeCursor({ ...cursor, o: value.length, h: MAX_FINGERPRINT });
+    const longestNext = encodeCursor({ ...here, o: value.length, h: MAX_FINGERPRINT });
     const wrap = (node: unknown, more: More) => frame(at, value, from, { list: [node], more }, longestNext, reserveFor(money), extra);
     const { node, more } = fitObject(item, itemPath, budget, wrap, entryFor);
     return frame(at, value, from, { list: [node], more }, next, money, extra);

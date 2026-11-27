@@ -186,6 +186,7 @@ export function answerTooLarge(tool: string, sections: string[], charge: Charge)
   return `This answer does not fit in ${LIMIT} bytes even with its long lists left out${next} ${chargedWithSupport(charge)}`;
 }
 
-export function pageTooLarge(kind: Kind, charge: Charge): string {
-  return `This page does not fit in ${LIMIT} bytes, so it cannot be read through MCP, and calling ${toolOf(kind)} again leads to the same page. ${chargedWithSupport(charge)}`;
+export function pageTooLarge(kind: Kind, nextCursor: string | null, charge: Charge): string {
+  const skip = nextCursor ? ` To skip this item and read the rest of the list, call get_more with the cursor ${nextCursor}.` : "";
+  return `This page does not fit in ${LIMIT} bytes, so it cannot be read through MCP, and calling ${toolOf(kind)} again leads to the same page.${skip} ${chargedWithSupport(charge)}`;
 }

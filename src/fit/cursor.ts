@@ -27,7 +27,7 @@ export interface Cursor {
 
 const PERSON_IDENTIFIERS = ["profile", "email", "twitter", "facebook", "github"];
 
-const SECTIONS: Partial<Record<Kind, [string, string][]>> = {
+export const SECTIONS: Partial<Record<Kind, [string, string][]>> = {
   p: [
     ["activities", "activities"],
     ["contactInformation.phoneNumbers", "phoneNumber"],
@@ -42,6 +42,9 @@ const SECTIONS: Partial<Record<Kind, [string, string][]>> = {
   ],
   c: [
     ["funding.summary.crunchbaseUrl", "extra"],
+    ["funding.summary.roundsCount", "extra"],
+    ["funding.summary.totalFundingAmountUsd", "extra"],
+    ["funding.summary.numberOfInvestors", "extra"],
     ["funding", "fundingData"],
     ["exits", "exitData"],
     ["acquisitions", "acquisitions"],
@@ -69,9 +72,31 @@ function isGiven(value: unknown): value is string | number {
   return typeof value === "number" || (typeof value === "string" && value.trim() !== "");
 }
 
-export function sectionsAsked(kind: Kind, params: Record<string, unknown>): string[] {
-  const sections = new Set(SECTIONS[kind]?.map(([, section]) => section));
-  return Object.keys(params).filter((name) => sections.has(name) && params[name] === "include");
+export function sectionsLeft(kind: Kind, params: Record<string, unknown>, data: unknown): string[] {
+  const left = new Set<string>();
+  const walk = (value: unknown, path: string) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      const section = sectionOf(kind, path);
+      if (section) left.add(section);
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) walk(child, path ? `${path}.${key}` : key);
+  };
+  walk(data, "");
+  return Object.keys(params).filter((name) => left.has(name) && params[name] === "include");
+}
+
+const isUsable = (value: unknown): value is string => typeof value === "string" && value.trim() !== "" && !LONE_SURROGATE.test(value);
+
+function returnedIdentifiers(kind: "p" | "c", data: unknown): CursorArgs[] {
+  const answer = data as { slug?: { linkedin?: unknown }; contactInformation?: { socialLinks?: { linkedinUrl?: unknown } } } | null;
+  const slug = answer?.slug?.linkedin;
+  const linkedinUrl = answer?.contactInformation?.socialLinks?.linkedinUrl;
+  if (kind === "p") return isUsable(slug) ? [{ profile: slug }] : [];
+  return [
+    ...(isUsable(linkedinUrl) ? [{ url: linkedinUrl }] : []),
+    ...(isUsable(slug) ? [{ url: `https://www.linkedin.com/company/${encodeURIComponent(slug)}` }] : []),
+  ];
 }
 
 export function repeatArgs(kind: Kind, firstArgs: Record<string, unknown>, data: unknown, path: string): CursorArgs {
@@ -80,10 +105,7 @@ export function repeatArgs(kind: Kind, firstArgs: Record<string, unknown>, data:
   const section = sectionOf(kind, path);
   const withSection = (identifier: CursorArgs): CursorArgs => ({ ...identifier, ...(section && { [section]: "include" }) });
   const given = withSection(pick(IDENTIFIERS[kind]));
-  const slug = (data as { slug?: { linkedin?: unknown } } | null)?.slug?.linkedin;
-  if (typeof slug !== "string" || slug.trim() === "" || LONE_SURROGATE.test(slug)) return given;
-  const returned = withSection(kind === "p" ? { profile: slug } : { url: `https://www.linkedin.com/company/${encodeURIComponent(slug)}` });
-  return hasValidArgs({ t: kind, a: returned }) ? returned : given;
+  return returnedIdentifiers(kind, data).map(withSection).find((args) => hasValidArgs({ t: kind, a: args })) ?? given;
 }
 
 export function encodeCursor(cursor: Cursor): string {
