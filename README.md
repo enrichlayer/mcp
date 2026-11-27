@@ -1,6 +1,6 @@
 # Enrich Layer v3 MCP server
 
-An [MCP](https://modelcontextprotocol.io) server for the Enrich Layer v3 API on `api.enrichlayer.com`. It gives an AI agent six tools: person and company profiles, company search, company logos, work email search and email validation.
+An [MCP](https://modelcontextprotocol.io) server for the Enrich Layer v3 API on `api.enrichlayer.com`. It gives an AI agent seven tools: person and company profiles, company search, company logos, work email search, email validation and the next pages of a long answer.
 
 The hosted server at `https://mcp.enrichlayer.com/v3/mcp` needs nothing installed: add the address to your client and sign in with your Enrich Layer account. You can also run the server on your own machine with an API key.
 
