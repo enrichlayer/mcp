@@ -3,7 +3,7 @@ import { TokenExchangeError } from "./auth/exchange.js";
 import { V3ApiError, V3InterruptedError, V3NetworkError, V3TimeoutError } from "./client.js";
 
 const DAY_SECONDS = 86_400;
-const SUPPORT_EMAIL = "support@enrichlayer.com";
+export const SUPPORT_EMAIL = "support@enrichlayer.com";
 
 export const CUT_OFF_ADVICE =
   "A call cut off before the answer arrives may still be charged. To get the copy that was saved in the meantime, call again without maxAgeSeconds; do not repeat a live lookup right away.";

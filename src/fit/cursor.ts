@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { MAX_INPUT_CHARS } from "../config.js";
 import { v3Params, type V3Path } from "../generated/v3-params.js";
 
 export const KIND_PATHS = {
@@ -21,31 +22,43 @@ export interface Cursor {
   p: string;
   o: number;
   h?: string;
+  i?: string[];
 }
 
 const PERSON_IDENTIFIERS = ["profile", "email", "twitter", "facebook", "github"];
 
-const SECTIONS: Partial<Record<Kind, [string, string][]>> = {
+export const SECTIONS: Partial<Record<Kind, [string, string][]>> = {
   p: [
     ["activities", "activities"],
     ["contactInformation.phoneNumbers", "phoneNumber"],
     ["contactInformation.emails.personal", "personalEmail"],
     ["contactInformation.emails.work", "workEmail"],
+    ["contactInformation.socialLinks", "socialLink"],
+    ["slug.github", "socialLink"],
+    ["slug.facebook", "socialLink"],
+    ["slug.twitter", "socialLink"],
     ["careerInsight", "careerInsight"],
     ["developerProfile", "developerProfile"],
   ],
   c: [
+    ["funding.summary.crunchbaseUrl", "extra"],
+    ["funding.summary.roundsCount", "extra"],
+    ["funding.summary.totalFundingAmountUsd", "extra"],
+    ["funding.summary.numberOfInvestors", "extra"],
     ["funding", "fundingData"],
     ["exits", "exitData"],
     ["acquisitions", "acquisitions"],
     ["contactInformation.emails", "extra"],
     ["contactInformation.phoneNumbers", "extra"],
+    ["contactInformation.socialLinks.crunchbaseUrl", "extra"],
+    ["slug.crunchbase", "extra"],
     ["stock", "extra"],
     ["activities", "activities"],
   ],
 };
 
 const IDENTIFIERS: Record<Kind, string[]> = { p: PERSON_IDENTIFIERS, c: ["url"], s: ["q"], l: ["q"], e: [], v: [] };
+const LONE_SURROGATE = /\p{Surrogate}/u;
 
 export function kindOf(path: V3Path): Kind {
   return (Object.keys(KIND_PATHS) as Kind[]).find((kind) => KIND_PATHS[kind] === path)!;
@@ -59,19 +72,40 @@ function isGiven(value: unknown): value is string | number {
   return typeof value === "number" || (typeof value === "string" && value.trim() !== "");
 }
 
+export function sectionsLeft(kind: Kind, params: Record<string, unknown>, data: unknown): string[] {
+  const left = new Set<string>();
+  const walk = (value: unknown, path: string) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      const section = sectionOf(kind, path);
+      if (section) left.add(section);
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) walk(child, path ? `${path}.${key}` : key);
+  };
+  walk(data, "");
+  return Object.keys(params).filter((name) => left.has(name) && params[name] === "include");
+}
+
+const isUsable = (value: unknown): value is string => typeof value === "string" && value.trim() !== "" && !LONE_SURROGATE.test(value);
+
+function returnedIdentifiers(kind: "p" | "c", data: unknown): CursorArgs[] {
+  const answer = data as { slug?: { linkedin?: unknown }; contactInformation?: { socialLinks?: { linkedinUrl?: unknown } } } | null;
+  const slug = answer?.slug?.linkedin;
+  const linkedinUrl = answer?.contactInformation?.socialLinks?.linkedinUrl;
+  if (kind === "p") return isUsable(slug) ? [{ profile: slug }] : [];
+  return [
+    ...(isUsable(linkedinUrl) ? [{ url: linkedinUrl }] : []),
+    ...(isUsable(slug) ? [{ url: `https://www.linkedin.com/company/${encodeURIComponent(slug)}` }] : []),
+  ];
+}
+
 export function repeatArgs(kind: Kind, firstArgs: Record<string, unknown>, data: unknown, path: string): CursorArgs {
   const pick = (names: string[]) => Object.fromEntries(names.filter((name) => isGiven(firstArgs[name])).map((name) => [name, firstArgs[name] as string | number]));
-  if (kind === "p") {
-    const slug = (data as { slug?: { linkedin?: unknown } } | null)?.slug?.linkedin;
-    const identifier = typeof slug === "string" && slug.trim() !== "" ? { profile: slug } : pick(PERSON_IDENTIFIERS);
-    const section = sectionOf(kind, path);
-    return { ...identifier, ...(section && { [section]: "include" }) };
-  }
-  if (kind === "c") {
-    const section = sectionOf(kind, path);
-    return { ...pick(["url"]), ...(section && { [section]: "include" }) };
-  }
-  return pick(Object.keys(v3Params[KIND_PATHS[kind]]));
+  if (kind !== "p" && kind !== "c") return pick(Object.keys(v3Params[KIND_PATHS[kind]]));
+  const section = sectionOf(kind, path);
+  const withSection = (identifier: CursorArgs): CursorArgs => ({ ...identifier, ...(section && { [section]: "include" }) });
+  const given = withSection(pick(IDENTIFIERS[kind]));
+  return returnedIdentifiers(kind, data).map(withSection).find((args) => hasValidArgs({ t: kind, a: args })) ?? given;
 }
 
 export function encodeCursor(cursor: Cursor): string {
@@ -86,11 +120,13 @@ const cursorSchema = z
     p: z.string().max(500),
     o: z.number().int().min(0),
     h: z.string().regex(/^[A-Za-z0-9_-]{8}$/).optional(),
+    i: z.array(z.string().regex(/^[A-Za-z0-9_-]{8}$/)).min(1).max(16).optional(),
   })
   .strict();
 
-function hasValidArgs({ t, a }: Cursor): boolean {
+function hasValidArgs({ t, a }: Pick<Cursor, "t" | "a">): boolean {
   if ("maxAgeSeconds" in a) return false;
+  if (Object.values(a).some((value) => typeof value === "string" && value.length > MAX_INPUT_CHARS)) return false;
   if (!z.object(v3Params[KIND_PATHS[t]]).strict().safeParse(a).success) return false;
   const identifiers = IDENTIFIERS[t].filter((name) => isGiven(a[name]));
   const sections = Object.keys(a).filter((name) => !IDENTIFIERS[t].includes(name));

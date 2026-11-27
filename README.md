@@ -165,6 +165,8 @@ An answer is never longer than 24,000 bytes. When a profile is longer, `data` ke
 
 Pass the `cursor` to `get_more` to read the list one page at a time. Every page is a new lookup of the same profile from the cached copy, asking only for the section that holds the list, so it is charged like that lookup; the page gives the charge in `creditCost` and ends with `nextCursor`, which is null after the last page. For the few profiles the source can serve only live, a page costs more. The server keeps nothing between calls, so pages work on every server of the hosted service. If the list changed since the earlier pages, the page says so and gives `restartCursor`.
 
+A cursor repeats what identifies the profile, so a URL, username, email address, name, `q` or `domain` longer than 512 characters is refused before the call; pass a page URL without its tracking parameters.
+
 Errors come back as tool errors with a readable message, `creditCost`, `requestId` and the next step to take: invalid parameters (400), an invalid or missing key (401), not enough credits or no access (403), not found (404), no copy fresh enough (409, with the age of the newest cached copy), rate limit (429) and service errors (5xx). The server retries 429 and 5xx twice before it reports them.
 
 ## Freshness and long calls
