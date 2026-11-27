@@ -281,21 +281,37 @@ test("sixty more lists still give a first page within the limit", async (t) => {
   assert.ok(Object.keys(first.structuredContent.more).length >= 60);
 });
 
-test("an answer that cannot fit even with its long lists left out is an error that names the charge", async (t) => {
+function tooBigCompany() {
   const data = bigCompany();
   for (let i = 0; i < 150; i += 1) data[`note${i}`] = `${i} ${"m".repeat(300)}`;
-  const { client } = await setup(t, () => ({ body: data, headers: headers(3, "req-big") }));
+  return data;
+}
+
+test("an answer that cannot fit even with its long lists left out, asked for without sections, says it cannot come through MCP and gives the request id", async (t) => {
+  const { client } = await setup(t, () => ({ body: tooBigCompany(), headers: headers(3, "req-big") }));
 
   const result = await client.callTool({ name: "get_company_profile", arguments: { url: COMPANY_URL } });
 
   assert.equal(result.isError, true);
   assert.equal(
     result.content[0].text,
-    "This answer does not fit in 24,000 bytes even with its long lists left out. Call get_company_profile again with fewer optional sections, or pass the page URL without tracking parameters. This call was charged 3 credits.",
+    "This answer does not fit in 24,000 bytes even with its long lists left out, so it cannot be returned through MCP. This call was charged 3 credits. To have the charge checked, contact support@enrichlayer.com with request id req-big.",
   );
 });
 
-test("a page that cannot fit is an error that names the charge", async (t) => {
+test("an answer that cannot fit with the sections it asked for names those sections", async (t) => {
+  const { client } = await setup(t, () => ({ body: tooBigCompany(), headers: headers(3, "req-big") }));
+
+  const result = await client.callTool({ name: "get_company_profile", arguments: { url: COMPANY_URL, extra: "include", exitData: "exclude", fundingData: "include" } });
+
+  assert.equal(result.isError, true);
+  assert.equal(
+    result.content[0].text,
+    "This answer does not fit in 24,000 bytes even with its long lists left out. Call get_company_profile again without some of the optional sections you asked for: fundingData, extra. This call was charged 3 credits. To have the charge checked, contact support@enrichlayer.com with request id req-big.",
+  );
+});
+
+test("a page that cannot fit says it cannot come through MCP and gives the request id", async (t) => {
   const data = bigPerson({ roles: 2 });
   data.experience.work[0] = Object.fromEntries(Array.from({ length: 150 }, (_, i) => [`field${i}`, `${i} ${"q".repeat(300)}`]));
   const { client } = await setup(t, (_, n) => ({ body: data, headers: headers(n === 1 ? 1 : 2, `req-${n}`) }));
@@ -304,7 +320,10 @@ test("a page that cannot fit is an error that names the charge", async (t) => {
   const page = await client.callTool({ name: "get_more", arguments: { cursor: first.structuredContent.more["experience.work"].cursor } });
 
   assert.equal(page.isError, true);
-  assert.equal(page.content[0].text, "This page does not fit in 24,000 bytes. Call get_person_profile again with fewer optional sections for new cursors. This call was charged 2 credits.");
+  assert.equal(
+    page.content[0].text,
+    "This page does not fit in 24,000 bytes, so it cannot be read through MCP, and calling get_person_profile again leads to the same page. This call was charged 2 credits. To have the charge checked, contact support@enrichlayer.com with request id req-2.",
+  );
 });
 
 function withValueAt(data, path, value) {
@@ -390,4 +409,57 @@ test("a page read with socialLink shows what the repeat call was charged", async
   assert.equal(first.structuredContent.creditCost, 2);
   assert.equal(page.structuredContent.creditCost, 2);
   assert.equal(page.structuredContent.requestId, "req-2");
+});
+
+const companySlugOf = (url) => decodeURIComponent(/\/(?:company|showcase)\/([^?/]+)/.exec(url.replace(/([^:]\/)\/+/g, "$1"))[1]);
+const personSlugOf = (profile) => decodeURIComponent(/\/in\/([^?/]+)/.exec(profile.replace(/([^:]\/)\/+/g, "$1"))?.[1] ?? profile);
+
+test("a page of a company comes from the company the first call returned, whatever else its URL names", async (t) => {
+  const company = (slug, text) => ({ ...bigCompany({ points: 5, affiliates: 2, locations: 2 }), slug: { linkedin: slug }, description: `${text} ${"d".repeat(30000)}` });
+  const companies = { acme: company("acme", "Acme builds examples."), other: company("other", "Other builds examples.") };
+  const { api, client } = await setup(t, (request, n) => ({ body: companies[companySlugOf(request.query.url)], headers: headers(1, `req-${n}`) }));
+
+  const first = await client.callTool({ name: "get_company_profile", arguments: { url: "https://www.linkedin.com/company//acme?next=/company/other" } });
+  const pages = await readEverything(client, first.structuredContent);
+
+  assert.equal(first.structuredContent.data.slug.linkedin, "acme");
+  assert.equal(pages.map((page) => page.text).join(""), companies.acme.description);
+  assert.deepEqual(api.requests.map((request) => companySlugOf(request.query.url)), api.requests.map(() => "acme"));
+});
+
+test("every cursor given out for an identifier at the limit or written oddly is accepted by get_more and reads the same profile", async (t) => {
+  const longSlug = "j".repeat(MAX_INPUT_CHARS + 88);
+  const { api, client } = await setup(t, (request, n) => {
+    const body =
+      request.path === "/v3/company"
+        ? { ...bigCompany(), slug: { linkedin: companySlugOf(request.query.url).toLowerCase() } }
+        : { ...bigPerson(), slug: { linkedin: request.query.email ? longSlug : personSlugOf(request.query.profile).toLowerCase() } };
+    return { body, headers: headers(1, `req-${n}`) };
+  });
+  const identityOf = (request) => (request.query.url ? companySlugOf(request.query.url).toLowerCase() : (request.query.email ?? personSlugOf(request.query.profile).toLowerCase()));
+  const calls = [
+    ["get_company_profile", { url: `https://www.linkedin.com/company/${"a".repeat(MAX_INPUT_CHARS - 33)}` }],
+    ["get_company_profile", { url: `https://linkedin.com/company/${"a".repeat(MAX_INPUT_CHARS - 29)}` }],
+    ["get_company_profile", { url: `https://linkedin.com/company/${"%C3%A9".repeat(80)}aaa` }],
+    ["get_company_profile", { url: `https://www.linkedin.com/company/${"é".repeat(MAX_INPUT_CHARS - 33)}` }],
+    ["get_company_profile", { url: "https://www.linkedin.com/company//acme?next=/company/other" }],
+    ["get_company_profile", { url: "https://www.linkedin.com/company/acme/" }],
+    ["get_company_profile", { url: "https://www.linkedin.com/showcase/acme-cloud" }],
+    ["get_company_profile", { url: "https://www.LinkedIn.com/company/ACME" }],
+    ["get_person_profile", { profile: `https://www.linkedin.com/in/${"a".repeat(MAX_INPUT_CHARS - 28)}`, activities: "include" }],
+    ["get_person_profile", { profile: "https://www.linkedin.com/in//jane-example?next=/in/other" }],
+    ["get_person_profile", { profile: `https://www.linkedin.com/in/${"%C3%A9".repeat(80)}` }],
+    ["get_person_profile", { email: "jane@example.com" }],
+  ];
+
+  for (const [name, args] of calls) {
+    const from = api.requests.length;
+    const first = await client.callTool({ name, arguments: args });
+    assert.equal(first.isError, undefined, first.content?.[0]?.text);
+    const pages = await readEverything(client, first.structuredContent);
+
+    const identities = api.requests.slice(from).map(identityOf);
+    assert.ok(pages.length > 0, JSON.stringify(args));
+    assert.deepEqual(identities, identities.map(() => identities[0]), JSON.stringify(args));
+  }
 });

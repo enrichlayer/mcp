@@ -1,5 +1,5 @@
 import { MAX_INPUT_CHARS, PAGE_BYTES } from "../config.js";
-import { CUT_OFF_ADVICE } from "../errors.js";
+import { CUT_OFF_ADVICE, SUPPORT_EMAIL } from "../errors.js";
 import { KIND_PATHS, type Kind } from "../fit/cursor.js";
 import type { V3Path } from "../generated/v3-params.js";
 
@@ -169,10 +169,23 @@ export function listGone(kind: Kind, creditCost: number | null): string {
   return `This list is not in the answer any more: the profile changed since the first page. Call ${toolOf(kind)} again for a fresh answer and new cursors. ${charged(creditCost)}`;
 }
 
-export function answerTooLarge(tool: string, creditCost: number | null): string {
-  return `This answer does not fit in ${LIMIT} bytes even with its long lists left out. Call ${tool} again with fewer optional sections, or pass the page URL without tracking parameters. ${charged(creditCost)}`;
+interface Charge {
+  creditCost: number | null;
+  requestId: string | null;
 }
 
-export function pageTooLarge(kind: Kind, creditCost: number | null): string {
-  return `This page does not fit in ${LIMIT} bytes. Call ${toolOf(kind)} again with fewer optional sections for new cursors. ${charged(creditCost)}`;
+function chargedWithSupport({ creditCost, requestId }: Charge): string {
+  return `${charged(creditCost)} To have the charge checked, contact ${SUPPORT_EMAIL}${requestId ? ` with request id ${requestId}` : ""}.`;
+}
+
+export function answerTooLarge(tool: string, sections: string[], charge: Charge): string {
+  const next =
+    sections.length > 0
+      ? `. Call ${tool} again without some of the optional sections you asked for: ${sections.join(", ")}.`
+      : ", so it cannot be returned through MCP.";
+  return `This answer does not fit in ${LIMIT} bytes even with its long lists left out${next} ${chargedWithSupport(charge)}`;
+}
+
+export function pageTooLarge(kind: Kind, charge: Charge): string {
+  return `This page does not fit in ${LIMIT} bytes, so it cannot be read through MCP, and calling ${toolOf(kind)} again leads to the same page. ${chargedWithSupport(charge)}`;
 }

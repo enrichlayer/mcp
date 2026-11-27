@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { CallV3, V3Params } from "../client.js";
 import { CACHE_ONLY_MAX_AGE_SECONDS, PAGE_BYTES, SSE_KEEP_ALIVE_MS } from "../config.js";
 import { describeFailure, type MessageOptions } from "../errors.js";
-import { KIND_PATHS, kindOf, readCursor } from "../fit/cursor.js";
+import { KIND_PATHS, kindOf, readCursor, sectionsAsked } from "../fit/cursor.js";
 import { firstPage, isWithin, nextPage } from "../fit/pages.js";
 import { v3Params } from "../generated/v3-params.js";
 import { answerTooLarge, INVALID_CURSOR, listGone, moreToolDef, pageTooLarge, tooLongInput, toolDefs, type ToolDef } from "./definitions.js";
@@ -100,8 +100,9 @@ export function registerTools(server: McpServer, callV3: CallV3, options: ToolOp
             signal: ctx.mcpReq.signal,
             clientName: server.server.getClientVersion()?.name,
           });
-          const page = firstPage(result, { kind: kindOf(def.path), args: params, budget: PAGE_BYTES });
-          return isWithin(page, PAGE_BYTES) ? success(page) : failure(answerTooLarge(def.name, result.creditCost));
+          const kind = kindOf(def.path);
+          const page = firstPage(result, { kind, args: params, budget: PAGE_BYTES });
+          return isWithin(page, PAGE_BYTES) ? success(page) : failure(answerTooLarge(def.name, sectionsAsked(kind, params), result));
         });
       },
     );
@@ -130,7 +131,7 @@ export function registerTools(server: McpServer, callV3: CallV3, options: ToolOp
         });
         const page = nextPage(result, cursor, { budget: PAGE_BYTES });
         if (!page) return failure(listGone(cursor.t, result.creditCost));
-        return isWithin(page, PAGE_BYTES) ? success(page) : failure(pageTooLarge(cursor.t, result.creditCost));
+        return isWithin(page, PAGE_BYTES) ? success(page) : failure(pageTooLarge(cursor.t, result));
       });
     },
   );

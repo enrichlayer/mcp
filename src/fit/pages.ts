@@ -1,6 +1,6 @@
 import type { V3Result } from "../client.js";
 import { compact } from "./compact.js";
-import { encodeCursor, fingerprint, repeatArgs, type Cursor, type Kind } from "./cursor.js";
+import { encodeCursor, fingerprint, readCursor, repeatArgs, type Cursor, type Kind } from "./cursor.js";
 
 export interface MoreEntry {
   items?: number;
@@ -48,7 +48,7 @@ export const ITEM_GONE_NOTE =
 type Part = { path: string; value: unknown[] | string };
 type Money = Pick<V3Result, "creditCost" | "requestId">;
 type Extra = Pick<Page, "changed" | "restartCursor" | "note">;
-type EntryFor = (path: string, value: unknown[] | string) => MoreEntry;
+type EntryFor = (path: string, value: unknown[] | string) => MoreEntry | null;
 type Wrap = (node: Record<string, unknown>, more: More) => unknown;
 
 const ROOT_KEY = "data";
@@ -70,10 +70,10 @@ function locate(root: unknown, path: string, bindings: string[] = []): Located {
   let bound = 0;
   for (const [depth, key] of keys.entries()) {
     if (Array.isArray(node) && bound < bindings.length) {
-      const wanted = bindings[bound];
+      const isWanted = (item: unknown) => fingerprint(compact(item)) === bindings[bound];
       const given = Number(key);
       const isInList = Number.isInteger(given) && given >= 0 && given < node.length;
-      const index = isInList && fingerprint(node[given]) === wanted ? given : node.findIndex((item) => fingerprint(item) === wanted);
+      const index = isInList && isWanted(node[given]) ? given : node.findIndex(isWanted);
       if (index < 0) return { gone: keys.slice(0, depth).join("."), bindings: bindings.slice(0, bound) };
       bound += 1;
       node = node[index];
@@ -110,30 +110,38 @@ function without(node: Record<string, unknown>, left: Set<string>, path = ""): R
 
 function fitObject(node: Record<string, unknown>, prefix: string, budget: number, wrap: Wrap, entryFor: EntryFor) {
   const parts = partsOf(node);
-  const entries = new Map<string, MoreEntry>();
+  const entries = new Map<string, MoreEntry | null>();
   const entryOf = (part: Part) => {
     if (!entries.has(part.path)) entries.set(part.path, entryFor(join(prefix, part.path), part.value));
     return entries.get(part.path)!;
   };
-  const isWorthMoving = (part: Part) => size(part.value) > size(entryOf(part)) + size(join(prefix, part.path));
-  const lists = parts.filter((part) => Array.isArray(part.value) && isWorthMoving(part));
-  const texts = parts.filter((part) => typeof part.value === "string").sort((a, b) => size(b.value) - size(a.value));
-  const left = new Set(lists.map((part) => part.path));
+  const left = new Set<string>();
   const render = () => ({
     node: without(node, left),
-    more: Object.fromEntries(parts.filter((part) => left.has(part.path)).map((part) => [join(prefix, part.path), entryOf(part)])),
+    more: Object.fromEntries(parts.filter((part) => left.has(part.path)).map((part) => [join(prefix, part.path), entryOf(part)!])),
   });
-  const fits = () => {
+  const measure = () => {
     const { node: rest, more } = render();
-    return size(wrap(rest, more)) <= budget;
+    return size(wrap(rest, more));
   };
+  let current = measure();
+  const moveIfSmaller = (part: Part) => {
+    if (!entryOf(part)) return;
+    left.add(part.path);
+    const moved = measure();
+    if (moved < current) current = moved;
+    else left.delete(part.path);
+  };
+  const lists = parts.filter((part) => Array.isArray(part.value));
+  for (const list of lists) moveIfSmaller(list);
+  const texts = parts.filter((part) => typeof part.value === "string").sort((a, b) => size(b.value) - size(a.value));
   for (const text of texts) {
-    if (fits() || !isWorthMoving(text)) break;
-    left.add(text.path);
+    if (current <= budget) break;
+    moveIfSmaller(text);
   }
-  for (const list of [...lists].sort((a, b) => size(a.value) - size(b.value))) {
+  for (const list of lists.filter((part) => left.has(part.path)).sort((a, b) => size(a.value) - size(b.value))) {
     left.delete(list.path);
-    if (!fits()) left.add(list.path);
+    if (measure() > budget) left.add(list.path);
   }
   return render();
 }
@@ -199,11 +207,13 @@ function countPages(value: unknown[] | string, cursor: Cursor, budget: number): 
 function entryMaker(kind: Kind, argsFor: (path: string) => Cursor["a"], budget: number, bindings?: string[]): EntryFor {
   return (path, value) => {
     const cursor: Cursor = { v: 1, t: kind, a: argsFor(path), p: path, o: 0, ...(bindings && { i: bindings }) };
+    const text = encodeCursor(cursor);
+    if (!readCursor(text)) return null;
     return {
       ...(typeof value === "string" ? { chars: value.length } : { items: value.length }),
       approxChars: size(value),
       pages: countPages(value, cursor, budget),
-      cursor: encodeCursor(cursor),
+      cursor: text,
     };
   };
 }
@@ -214,7 +224,10 @@ export function firstPage(result: V3Result, { kind, args, budget }: { kind: Kind
   if (size({ data, ...money }) <= budget) return { data, ...money };
   const entryFor = entryMaker(kind, (path) => repeatArgs(kind, args, data, path), budget);
   const wrap = (node: unknown, more: More): FirstPage => ({ data: node, ...money, more, note: MORE_NOTE });
-  if (!isObject(data)) return wrap(Array.isArray(data) ? [] : null, { [ROOT_KEY]: entryFor("", data as unknown[] | string) });
+  if (!isObject(data)) {
+    const entry = entryFor("", data as unknown[] | string);
+    return entry ? wrap(Array.isArray(data) ? [] : null, { [ROOT_KEY]: entry }) : { data, ...money };
+  }
   const { node, more } = fitObject(data, "", budget, wrap, entryFor);
   return wrap(node, more);
 }
@@ -230,9 +243,9 @@ function gonePage(cursor: Cursor, gone: { gone: string; bindings: string[] }, mo
 
 export function nextPage(fresh: V3Result, cursor: Cursor, { budget }: { budget: number }): Page | null {
   const money = { creditCost: fresh.creditCost, requestId: fresh.requestId };
-  const found = locate(compact(fresh.data), cursor.p, cursor.i);
+  const found = locate(fresh.data, cursor.p, cursor.i);
   if ("gone" in found) return gonePage(cursor, found, money);
-  const value = found.value;
+  const value = compact(found.value);
   if (!Array.isArray(value) && typeof value !== "string") return null;
   const restart = encodeCursor({ v: 1, t: cursor.t, a: cursor.a, p: cursor.p, o: 0, ...(cursor.i && { i: cursor.i }) });
   const isChanged = cursor.o > 0 && cursor.h !== fingerprint(value.slice(0, cursor.o));
@@ -254,5 +267,6 @@ export function nextPage(fresh: V3Result, cursor: Cursor, { budget }: { budget: 
     const { node, more } = fitObject(item, itemPath, budget, wrap, entryFor);
     return frame(at, value, from, { list: [node], more }, next, money, extra);
   }
-  return frame(at, value, from, { list: [], more: { [itemPath]: entryFor(itemPath, item as unknown[] | string) } }, next, money, extra);
+  const entry = entryFor(itemPath, item as unknown[] | string);
+  return frame(at, value, from, entry ? { list: [], more: { [itemPath]: entry } } : { list: [item] }, next, money, extra);
 }
